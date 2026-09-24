@@ -124,7 +124,7 @@ export async function runFullAccessTurn(job, { report, log, codexBin = resolveCo
     await server.request("initialize", { clientInfo: { name: "Codex Desktop", title: "Codex Desktop (cross-session-bridge full access)", version: "1.0.0" }, capabilities: { experimentalApi: true } });
     server.notify("initialized", {});
     const started = await server.request("thread/start", {
-      cwd: job.cwd, approvalPolicy: FULL_ACCESS.approvalPolicy, sandbox: FULL_ACCESS.sandbox, threadSource: "agent_created_thread",
+      cwd: job.cwd, approvalPolicy: FULL_ACCESS.approvalPolicy, sandbox: FULL_ACCESS.sandbox, threadSource: "agent_created_thread", serviceTier: "default",
       ...(job.model ? { model: job.model } : {}),
     });
     const threadId = started?.thread?.id;
@@ -136,7 +136,7 @@ export async function runFullAccessTurn(job, { report, log, codexBin = resolveCo
     if (job.title) await server.request("thread/name/set", { threadId, name: job.title }).catch((error) => log(`thread/name/set failed: ${error.message}`));
     const turn = await server.request("turn/start", {
       threadId, input: [{ type: "text", text: job.prompt, text_elements: [] }],
-      approvalPolicy: FULL_ACCESS.approvalPolicy, sandboxPolicy: FULL_ACCESS.sandboxPolicy,
+      approvalPolicy: FULL_ACCESS.approvalPolicy, sandboxPolicy: FULL_ACCESS.sandboxPolicy, serviceTier: "default",
       ...(job.model ? { model: job.model } : {}), ...(job.effort ? { effort: job.effort } : {}),
     });
     const turnId = turn?.turn?.id;

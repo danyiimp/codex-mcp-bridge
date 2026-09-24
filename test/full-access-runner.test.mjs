@@ -65,9 +65,9 @@ describe('full-access runner', () => {
     await until(() => activeFullAccessRunner('thread-1') === null);
     const byMethod = Object.fromEntries(f.messages().filter((message) => message.method).map((message) => [message.method, message.params]));
     assert.equal(byMethod.initialize.clientInfo.name, 'Codex Desktop');
-    assert.deepEqual(byMethod['thread/start'], { cwd: f.directory, approvalPolicy: 'never', sandbox: 'danger-full-access', threadSource: 'agent_created_thread', model: 'gpt-6-luna' });
+    assert.deepEqual(byMethod['thread/start'], { cwd: f.directory, approvalPolicy: 'never', sandbox: 'danger-full-access', threadSource: 'agent_created_thread', serviceTier: 'default', model: 'gpt-6-luna' });
     assert.deepEqual(byMethod['thread/name/set'], { threadId: 'thread-1', name: 'Probe title' });
-    assert.deepEqual(byMethod['turn/start'], { threadId: 'thread-1', input: [{ type: 'text', text: 'Probe', text_elements: [] }], approvalPolicy: 'never', sandboxPolicy: { type: 'dangerFullAccess' }, model: 'gpt-6-luna', effort: 'low' });
+    assert.deepEqual(byMethod['turn/start'], { threadId: 'thread-1', input: [{ type: 'text', text: 'Probe', text_elements: [] }], approvalPolicy: 'never', sandboxPolicy: { type: 'dangerFullAccess' }, serviceTier: 'default', model: 'gpt-6-luna', effort: 'low' });
     assert.deepEqual(byMethod['thread/unsubscribe'], { threadId: 'thread-1' });
     await until(() => fs.readFileSync(runnerLogPath(), 'utf8').includes('finished: completed'));
   });
