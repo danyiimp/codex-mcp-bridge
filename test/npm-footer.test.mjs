@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
 const wrapper = fileURLToPath(new URL("../scripts/npm-footer.sh", import.meta.url));
-const packageName = "@minhspark/codex-mcp-bridge";
+const packageName = "@danyiimp/codex-mcp-bridge";
 const fakeNpm = `#!/usr/bin/env node
 import fs from "node:fs";
 const args = process.argv.slice(2);

@@ -18,7 +18,7 @@ for ($argumentIndex = 1; $matchesInstall -and $argumentIndex -lt $npmArguments.C
     $argument = [string]$npmArguments[$argumentIndex]
     if ($argument -cin @('-g', '--global', '--global=true')) {
         $isGlobal = $true
-    } elseif ($argument -cmatch '^@minhspark/codex-mcp-bridge(?:@[^\s]+)?$') {
+    } elseif ($argument -cmatch '^@danyiimp/codex-mcp-bridge(?:@[^\s]+)?$') {
         $targetCount++
     } elseif ($argument -cin @('--no-fund', '--no-audit', '--force', '--ignore-scripts', '--foreground-scripts')) {
         continue
@@ -50,12 +50,12 @@ $PSNativeCommandUseErrorActionPreference = $false
 $readVersion = {
     param([string]$PackageRoot)
     try {
-        $metadataPath = Join-Path $PackageRoot '@minhspark/codex-mcp-bridge/package.json'
+        $metadataPath = Join-Path $PackageRoot '@danyiimp/codex-mcp-bridge/package.json'
         if (-not [System.IO.File]::Exists($metadataPath)) {
             return @{ Status = 'missing'; Version = $null }
         }
         $metadata = [System.IO.File]::ReadAllText($metadataPath) | ConvertFrom-Json -ErrorAction Stop
-        if ($metadata.name -cne '@minhspark/codex-mcp-bridge' -or $metadata.version -isnot [string] -or $metadata.version -cnotmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') {
+        if ($metadata.name -cne '@danyiimp/codex-mcp-bridge' -or $metadata.version -isnot [string] -or $metadata.version -cnotmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') {
             return @{ Status = 'unknown'; Version = $null }
         }
         return @{ Status = 'known'; Version = $metadata.version }
@@ -109,7 +109,7 @@ $global:LASTEXITCODE = 0
 $npmExitCode = $LASTEXITCODE
 try {
     if ($npmExitCode -ne 0) {
-        Write-Host "Failed to install: @minhspark/codex-mcp-bridge (exit code $npmExitCode). See npm error above."
+        Write-Host "Failed to install: @danyiimp/codex-mcp-bridge (exit code $npmExitCode). See npm error above."
         exit $npmExitCode
     }
     if ($null -eq $dryRun) {
@@ -117,7 +117,7 @@ try {
         exit $npmExitCode
     }
     if ($dryRun) {
-        Write-Host 'Dry run completed: @minhspark/codex-mcp-bridge (no changes applied).'
+        Write-Host 'Dry run completed: @danyiimp/codex-mcp-bridge (no changes applied).'
         exit $npmExitCode
     }
     $afterRoot = & $readRoot
@@ -126,13 +126,13 @@ try {
         $after = & $readVersion $afterRoot
     }
     if ($after.Status -ne 'known' -or $before.Status -eq 'unknown' -or $beforeRoot -cne $afterRoot) {
-        Write-Host 'Warning: npm completed, but the installed @minhspark/codex-mcp-bridge version could not be verified.'
+        Write-Host 'Warning: npm completed, but the installed @danyiimp/codex-mcp-bridge version could not be verified.'
     } elseif ($before.Status -eq 'missing') {
-        Write-Host "Successfully installed: @minhspark/codex-mcp-bridge v$($after.Version)"
+        Write-Host "Successfully installed: @danyiimp/codex-mcp-bridge v$($after.Version)"
     } elseif ($before.Version -ceq $after.Version) {
-        Write-Host "Already up to date: @minhspark/codex-mcp-bridge v$($after.Version)"
+        Write-Host "Already up to date: @danyiimp/codex-mcp-bridge v$($after.Version)"
     } else {
-        Write-Host "Successfully updated: @minhspark/codex-mcp-bridge v$($before.Version) -> v$($after.Version)"
+        Write-Host "Successfully updated: @danyiimp/codex-mcp-bridge v$($before.Version) -> v$($after.Version)"
     }
 } finally {
     $global:LASTEXITCODE = $npmExitCode

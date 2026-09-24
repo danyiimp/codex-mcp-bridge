@@ -1,41 +1,42 @@
 # codex-mcp-bridge
 
-[![npm](https://img.shields.io/npm/v/@minhspark/codex-mcp-bridge?logo=npm&color=CB3837)](https://www.npmjs.com/package/@minhspark/codex-mcp-bridge)
-[![CI](https://github.com/buidangminh23/codex-mcp-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/buidangminh23/codex-mcp-bridge/actions/workflows/ci.yml)
-[![license](https://img.shields.io/npm/l/@minhspark/codex-mcp-bridge)](LICENSE)
+[![CI](https://github.com/danyiimp/codex-mcp-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/danyiimp/codex-mcp-bridge/actions/workflows/ci.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 Send prompts and replies between **Claude and Codex**, keeping each conversation in its own app. Supports Windows, macOS, and Linux; native Desktop integration supports Windows and macOS.
+
+This is Danny Imp's fork of [the original codex-mcp-bridge](https://github.com/buidangminh23/codex-mcp-bridge). It retains the upstream bridge and adds persistent Claude Code session creation from Codex, plus a combined MCP server you can install without CCS. The original authors and MIT license are credited in [LICENSE](LICENSE).
+
+**Install this fork from GitHub (no CCS or package-registry login required):**
+
+```bash
+npm install -g github:danyiimp/codex-mcp-bridge#v1.18.0-csb.1
+```
+
+The combined server is registered with `cross-session-bridge-install` as described in [Standalone Cross Session Bridge](#standalone-cross-session-bridge). The original bridge entrypoints are still available.
 
 https://github.com/user-attachments/assets/98b23989-826f-4d7d-9dcb-ad7dd2739095
 
 ## Release notifications
 
-To receive new release notifications, open [this repository](https://github.com/buidangminh23/codex-mcp-bridge), select **Watch → Custom → Releases**, then click **Apply**. Choose GitHub or email delivery in your [notification settings](https://github.com/settings/notifications).
+To receive new release notifications, open [this repository](https://github.com/danyiimp/codex-mcp-bridge), select **Watch → Custom → Releases**, then click **Apply**. Choose GitHub or email delivery in your [notification settings](https://github.com/settings/notifications).
 
 Starring the repository or downloading/installing a package does not subscribe you to release notifications. Notifications do not update your installed copy; follow the installation instructions to update.
 
-[View release notes](https://github.com/buidangminh23/codex-mcp-bridge/releases).
-
-## Project statistics
-
-**[Open live dashboard — refreshes every 30 seconds](https://buidangminh23.github.io/codex-mcp-bridge/)**
-
-[![Repository usage dashboard](https://raw.githubusercontent.com/buidangminh23/codex-mcp-bridge/analytics/dashboard.svg)](https://github.com/buidangminh23/codex-mcp-bridge/tree/analytics)
-
-[Full statistics and daily history](https://github.com/buidangminh23/codex-mcp-bridge/tree/analytics) · [Public aggregate JSON](https://raw.githubusercontent.com/buidangminh23/codex-mcp-bridge/analytics/data.json) · [How these metrics work](#repository-analytics)
+[View release notes](https://github.com/danyiimp/codex-mcp-bridge/releases).
 
 ## Installation
 
 ### GitHub Packages
 
-The repository-linked copy is [@buidangminh23/codex-mcp-bridge](https://github.com/buidangminh23/codex-mcp-bridge/packages)
-on npm.pkg.github.com. The npmjs.com package remains @minhspark/codex-mcp-bridge.
+The repository-linked copy is [@danyiimp/codex-mcp-bridge](https://github.com/danyiimp/codex-mcp-bridge/packages)
+on npm.pkg.github.com. The npmjs.com package `@minhspark/codex-mcp-bridge` belongs to the original project; install this fork from GitHub using the command above when registry authentication is unavailable.
 GitHub's npm registry requires authentication with a classic token with read:packages,
 even for public packages. Authenticate locally and never commit a token:
 
 ```bash
-npm login --scope=@buidangminh23 --registry=https://npm.pkg.github.com --auth-type=legacy
-npm install -g @buidangminh23/codex-mcp-bridge --registry=https://npm.pkg.github.com
+npm login --scope=@danyiimp --registry=https://npm.pkg.github.com --auth-type=legacy
+npm install -g @danyiimp/codex-mcp-bridge --registry=https://npm.pkg.github.com
 ```
 
 Then follow the platform registration and verification instructions below.
@@ -69,7 +70,7 @@ node --version
 npm.cmd --version
 codex.exe --version
 codex.exe login
-npm.cmd install -g @minhspark/codex-mcp-bridge@latest
+npm.cmd install -g github:danyiimp/codex-mcp-bridge#v1.18.0-csb.1
 $env:CODEX_EXE = (Get-Command codex.exe).Source
 codex-native-relay-install.cmd --desktop-tasks
 codex-mcp-bridge-install.cmd --desktop-tasks
@@ -90,7 +91,7 @@ brew install node@24
 export PATH="$(brew --prefix node@24)/bin:$PATH"
 node --version
 npm --version
-npm install -g @openai/codex@latest @minhspark/codex-mcp-bridge@latest
+npm install -g @openai/codex@latest github:danyiimp/codex-mcp-bridge#v1.18.0-csb.1
 codex --version
 codex login
 codex-native-relay-install --desktop-tasks
@@ -121,7 +122,7 @@ fnm default 24
 fnm use 24
 node --version
 npm --version
-npm install -g @openai/codex@latest @minhspark/codex-mcp-bridge@latest
+npm install -g @openai/codex@latest github:danyiimp/codex-mcp-bridge#v1.18.0-csb.1
 codex login
 curl -fsSL https://claude.ai/install.sh | bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -132,7 +133,7 @@ CODEX_BRIDGE_DESKTOP_TASKS=0 claude-mcp-bridge-install
 Start `claude` once and complete sign-in, then exit back to the shell. Register the forward bridge below, then reopen Claude or reconnect its MCP server:
 
 ```bash
-bridge_root="$(npm root -g)/@minhspark/codex-mcp-bridge"
+bridge_root="$(npm root -g)/@danyiimp/codex-mcp-bridge"
 claude mcp add --scope user codex-bridge \
   -e CODEX_BIN="$(command -v codex)" \
   -e CODEX_BRIDGE_DESKTOP_TASKS=0 \
@@ -165,7 +166,7 @@ curl -fsSL https://claude.ai/install.sh | bash
 Open a new terminal after installation. Linux users who completed the preceding section are already registered. For **Windows Desktop mode**:
 
 ```powershell
-$bridgeRoot = Join-Path ((npm.cmd root -g).Trim()) '@minhspark/codex-mcp-bridge'
+$bridgeRoot = Join-Path ((npm.cmd root -g).Trim()) '@danyiimp/codex-mcp-bridge'
 $nodeBin = (Get-Command node.exe).Source
 $codexBin = (Get-Command codex.exe).Source
 claude mcp add --scope user codex-bridge `
@@ -180,7 +181,7 @@ claude mcp add --scope user codex-bridge `
 For **macOS Desktop mode**:
 
 ```bash
-bridge_root="$(npm root -g)/@minhspark/codex-mcp-bridge"
+bridge_root="$(npm root -g)/@danyiimp/codex-mcp-bridge"
 claude mcp add --scope user codex-bridge \
   -e CODEX_BIN="$(command -v codex)" \
   -e CODEX_BRIDGE_DESKTOP_TASKS=1 \
@@ -215,6 +216,24 @@ Ask the active tasks to run these **MCP tools**, not shell commands:
 | Codex Desktop only | `native_relay_status` | Account relay listening and native tools available |
 
 The registered supervisor should report auto-reload enabled. Next, list the intended destination with `list_codex_threads` or `list_claude_sessions`, then send a short message and verify its reply. A package version or a running process alone does not establish successful delivery.
+
+## Standalone Cross Session Bridge
+
+The new combined server is a separate MCP entrypoint in this package. It works with a regular Claude Code installation and its default `~/.claude` configuration; CCS is optional. The upstream entrypoints and the platform setup above remain available. On macOS and Windows, install the native relay using the platform instructions, ensure the `claude` CLI is installed and signed in, then register the combined server for both clients:
+
+```bash
+cross-session-bridge-install --both
+```
+
+In PowerShell use `cross-session-bridge-install.cmd --both`. `--codex` or `--claude` registers just one side; add `--remove` to undo that registration. The installer discovers the real Codex and Claude executables and records their absolute paths, so a restricted MCP `PATH` does not change which clients run. You can set `CODEX_EXE` and `CLAUDE_BIN` to explicit executable paths before installation. Reconnect the `cross-session-bridge` MCP server in existing Codex and Claude Code tasks, then call `bridge_status` to check `apiVersion`, capabilities and `autoReload`.
+
+From a Codex Desktop task, call `create_claude_session` with an absolute project `cwd`, a `message`, and a stable `request_id`. It starts a persistent native Claude Code background session and returns its `sessionId`. Choose `model` (`fable`, `opus`, `sonnet`, `haiku`), `effort` (`low`, `medium`, `high`, `xhigh`, `max`), and `permission_mode` (`manual`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions`) when needed. The default permission mode is `manual`; explicit `bypassPermissions` requires a verified full-access Codex caller. Claude must already trust the project. Use `profile: "default"` for a normal installation, `"CLAUDE_CONFIG_DIR"` when that environment variable selects another Claude configuration, or an optional installed CCS profile. `mcp_mode: "none"` skips the new session's external MCP servers.
+
+Read a new session with `read_claude_session(target=sessionId, cwd=..., profile=...)`; continue its live conversation with `send_to_claude_session` using the exact ID. `get_claude_request(cwd=..., request_id=...)` recovers an uncertain creation without starting another session. The request ID is scoped to the calling Codex task and canonical project directory. Reading returns bounded text and native status separately; acceptance is not task completion. Attach interactively with the returned command if the session needs a user decision.
+
+From Claude Code, `create_oai_session` creates a persistent Codex Desktop task; `read_oai_session` and `get_oai_request` recover its result, and `send_to_oai_session` continues it. The bridge starts these tasks with full access (`approval_policy: never`, `danger-full-access` sandbox, network enabled), so give them work you intend to run with those permissions. Pin `model` and `effort` on creation or follow-up when appropriate. Claude's own sessions keep the permission mode selected at creation.
+
+This combined entrypoint has been verified on macOS with Claude Code's native `--background` support. The original upstream CLI/app-server mode remains documented for Linux/WSL; the combined Desktop task path needs the native Desktop relay.
 
 ## Use
 
@@ -252,15 +271,15 @@ Exactly one line: `DONE — changed: <files>` or `DONE — no changes`.
 - Desktop mode uses the native relay and the apps' permissions; it does not fall back to an external app-server.
 - Account switches are checked before delivery. Missing identity or incompatible permissions block sending.
 - Access settings are preserved on reinstall. Review allowed workspaces before enabling the bridge.
-- CLI/app-server setup, all tools, and advanced settings are in the [reference](https://github.com/buidangminh23/codex-mcp-bridge/blob/main/REFERENCE.md).
+- CLI/app-server setup, all tools, and advanced settings are in the [reference](https://github.com/danyiimp/codex-mcp-bridge/blob/main/REFERENCE.md).
 
 ## Update
 
 ```bash
-npm install -g @minhspark/codex-mcp-bridge@latest
+npm install -g github:danyiimp/codex-mcp-bridge#v1.18.0-csb.1
 ```
 
-Supervisor-based installs reload compatible updates when idle. Older installs or changed MCP settings need a one-time reconnect; see [upgrade instructions](https://github.com/buidangminh23/codex-mcp-bridge/blob/main/REFERENCE.md#upgrading-an-install-you-already-have).
+Supervisor-based installs reload compatible updates when idle. Older installs or changed MCP settings need a one-time reconnect; see [upgrade instructions](https://github.com/danyiimp/codex-mcp-bridge/blob/main/REFERENCE.md#upgrading-an-install-you-already-have).
 
 On Windows, use `npm.cmd` if PowerShell blocks `npm.ps1`. Upgrade the Codex CLI with the same manager used to install it: `winget upgrade --id OpenAI.Codex --exact` for the Windows path above, or `npm install -g @openai/codex@latest` for the macOS/Linux path. Updating the bridge does not update the clients.
 
@@ -277,7 +296,7 @@ If Node moved or a registration still points at an old installation, rerun the c
 | PowerShell says `npm.ps1` or an installer script cannot be loaded | Use `npm.cmd` and the bridge installer's `.cmd` command shown above. For Codex use `codex.exe`; keep machine execution policies unchanged. |
 | `EACCES` on macOS/Linux | Use a user-owned Node version manager, then reinstall globally under that Node. See npm's [permission error guide](https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally/). |
 | `EPERM`, `EBUSY`, or a file is in use on Windows | Let active work finish, close the process named in the error if it owns the package files, and retry the same npm command. Check the reported path's permissions or security-software event if it persists. |
-| `E404` for the bridge | Check the exact package name `@minhspark/codex-mcp-bridge`. Run the registry checks below; a private mirror may not contain the package. |
+| `E404` for the bridge | Check the exact package name `@danyiimp/codex-mcp-bridge`. Run the registry checks below; a private mirror may not contain the package. |
 | `ETIMEDOUT`, `ECONNRESET`, DNS, proxy, or certificate errors | Run the registry checks below. Correct the configured proxy or use the CA certificate supplied by the network administrator. Keep TLS verification enabled. |
 | Claude installer returns HTML, `403`, or a curl error | Use the alternatives and error-specific fixes in [Claude Code installation troubleshooting](https://code.claude.com/docs/en/troubleshooting). |
 
@@ -286,15 +305,14 @@ Run these registry and cache diagnostics; in PowerShell replace `npm` with `npm.
 ```bash
 npm config get registry
 npm ping
-npm view @minhspark/codex-mcp-bridge version
-npm view @minhspark/codex-mcp-bridge version --registry=https://registry.npmjs.org/
+npm view @danyiimp/codex-mcp-bridge version --registry=https://npm.pkg.github.com
 npm cache verify
 ```
 
 If the public registry works but a configured mirror does not, update the mirror configuration or, where permitted, install once from the public registry:
 
 ```bash
-npm install -g @minhspark/codex-mcp-bridge@latest --registry=https://registry.npmjs.org/
+npm install -g github:danyiimp/codex-mcp-bridge#v1.18.0-csb.1
 ```
 
 ### Installed, but the bridge does not connect
@@ -313,67 +331,14 @@ Start with `codex doctor` for Codex installation problems and `claude doctor` fo
 | Linux says native relay unavailable | Use the Linux CLI setup with `CODEX_BRIDGE_DESKTOP_TASKS=0` on both registrations. Native Desktop relay support is Windows/macOS only. |
 | No Claude sessions or no matching saved project | Keep the intended Code session open under the same OS user. In Desktop mode, use a Claude Desktop Code session and an existing saved Codex project with the exact local path. Check both clients are signed in. |
 | `NOT AUTHORIZED` / workspace refused | Inspect `CODEX_BRIDGE_ALLOWED_ROOTS` and `CODEX_BRIDGE_THREAD_POLICY`. Add the intended writable project path to the relevant registration and reconnect; retain unrelated restrictions. |
-| Account identity unavailable / changed | Complete sign-in in the intended clients and recheck their status. Desktop routing requires supported local account identity; API-key or unsupported credential storage is not a substitute. See [account requirements](https://github.com/buidangminh23/codex-mcp-bridge/blob/main/REFERENCE.md#switching-desktop-accounts). |
+| Account identity unavailable / changed | Complete sign-in in the intended clients and recheck their status. Desktop routing requires supported local account identity; API-key or unsupported credential storage is not a substitute. See [account requirements](https://github.com/danyiimp/codex-mcp-bridge/blob/main/REFERENCE.md#switching-desktop-accounts). |
 | Runtime is stale or update pending | Check the configured installation path and `autoReload` status. Active calls and unresolved deliveries defer a reload. Let them finish; reconnect once for legacy registrations or changed environment variables. |
 | Task is “open in another application” | For Desktop tasks, use the native mode above. For CLI/app-server tasks, let the owning turn finish and release its subscription before opening elsewhere. |
 | CLI mode cannot connect after reboot | Check `codex_bridge_status`, the configured endpoint, and whether autostart is enabled. The CLI setup uses `ws://127.0.0.1:8791`. If manually starting `codex app-server --listen ws://127.0.0.1:8791`, first confirm no server already owns that endpoint. |
 | CLI server says the model needs a newer Codex | Update Codex, then restart the specific old app-server after its active work finishes. Updating files does not replace an already running process. |
 | Send timed out / reply unconfirmed | Read the original task or delivery receipt before retrying. A timeout does not cancel the task, and retrying can send it twice. |
 
-For unresolved failures, [open an issue](https://github.com/buidangminh23/codex-mcp-bridge/issues) with the OS, Node/bridge/client versions, the failing command, and the relevant redacted status/error. Leave out tokens, credentials, and private conversations. More detail is in the [technical reference](https://github.com/buidangminh23/codex-mcp-bridge/blob/main/REFERENCE.md#troubleshooting).
-
-## Repository analytics
-
-The live dashboard polls the aggregate API every 30 seconds. Installation counts reflect reports received by the server; this is not a count of currently online processes. Public GitHub/npm sources are refreshed with a short cache, but their own statistics may be delayed. GitHub Actions refreshes and archives statistics hourly through the `Repository analytics` workflow, including private GitHub traffic; scheduled runs may be delayed by GitHub. That workflow needs the `ANALYTICS_TOKEN` repository secret set to a token with push access to this repository (fine-grained: Contents read/write plus Administration read); the default workflow token cannot read GitHub traffic, so without it the views/clones sources are retained from the last successful run and the run is reported as incomplete while the Pages deployment still succeeds. The README image is a snapshot and may be cached by GitHub; open the live dashboard for automatic updates. Source timestamps show freshness; missing data is unavailable, not zero. Only aggregate figures are published. Installation IDs stay in the private database.
-
-Repository owners can view [GitHub traffic](https://github.com/buidangminh23/codex-mcp-bridge/graphs/traffic) for recent views and clones. Downloads and clones include updates, reinstalls, and automation; they do not measure active users. GitHub traffic only covers the recent 14-day window, so collect it regularly to keep a longer history.
-
-From a source checkout with Node 22+ and GitHub CLI authenticated as an account with repository traffic access:
-
-```bash
-gh auth status
-npm run analytics
-```
-
-The collector saves `history.json` and a self-contained `index.html` dashboard privately:
-
-| Platform | Default directory |
-|---|---|
-| Windows | `%LOCALAPPDATA%\codex-mcp-bridge\analytics` |
-| macOS | `~/Library/Application Support/codex-mcp-bridge/analytics` |
-| Linux | `${XDG_DATA_HOME:-~/.local/share}/codex-mcp-bridge/analytics` |
-
-Open `index.html` in a browser. Back up `history.json` to preserve the archive. Use `npm run analytics -- --output <directory>` to choose another private directory. Each run refreshes overlapping dates without double-counting, records per-source collection times, and preserves earlier successful data if a source fails. Daily unique visitors/cloners cannot be summed to estimate unique people across days. Release asset download counters are also retained in the JSON archive.
-
-Run this command daily through a local scheduler or Codex automation while the machine is available. Scheduling is not installed by the package. A missed interval longer than GitHub's retention window cannot be recovered. For collection errors, check `gh auth status`, repository permissions, network connectivity, and API limits; rerun after correcting the cause. Never commit the private output directory.
-
-To refresh the public dashboard, run `npm run analytics:publish`. It publishes an allowlisted aggregate snapshot to the separate `analytics` data branch and leaves application source unchanged. To include installation metrics, run `scripts/usage-summary.sql` through the owner's Supabase SQL editor or connector, save the returned `summary` object privately as `usage-summary.json`, and pass `--usage <path-to-usage-summary.json>` to the publisher. The summary query returns counts only. Do not supply raw installation rows or service credentials.
-
-### Optional active-install statistics
-
-Usage reporting is **off by default**. Each end user must explicitly enable it:
-
-```bash
-codex-mcp-bridge telemetry enable
-codex-mcp-bridge telemetry status
-codex-mcp-bridge telemetry disable
-```
-
-The equivalent `claude-mcp-bridge telemetry ...` commands share the same local consent. When enabled, the bridge checks at startup and hourly while running, sending at most one successful report per UTC day to the project's Supabase endpoint: a random installation ID, UTC day, bridge version, and operating system. No chat content, paths, account identity, or credentials are included. Network infrastructure may process normal request metadata; the application's statistics table does not store IP addresses. Reporting failures do not interrupt bridge operation. `DO_NOT_TRACK=1` or `CODEX_BRIDGE_TELEMETRY=0` overrides local consent and suppresses reporting.
-
-These counts represent voluntarily reporting installations, not unique people or all users. Disabling stops future reports and removes the local installation ID. Previously submitted records older than 90 days are removed during subsequent ingestion. Source checkouts containing this feature support these commands; older published package versions do not.
-
-The owner can query `public.bridge_usage_daily` in the Supabase SQL editor. Public and authenticated client roles cannot read the table or call its ingestion function. The endpoint validates the project's public publishable key, so counts are approximate and can include fabricated IDs; its 10,000-record daily storage cap does not prevent request spam. Apply the migration under `supabase/migrations` before deploying `bridge-usage` with the supplied function configuration (custom publishable-key validation; legacy JWT verification disabled). The client contains only a public publishable key; service credentials stay in the Edge Function environment.
-
-```sql
-SELECT day, count(*) AS reporting_installations
-FROM public.bridge_usage_daily
-GROUP BY day ORDER BY day DESC;
-
-SELECT count(DISTINCT install_id) AS reporting_installations_last_30_days
-FROM public.bridge_usage_daily
-WHERE day >= (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date - 29;
-```
+For unresolved failures, [open an issue](https://github.com/danyiimp/codex-mcp-bridge/issues) with the OS, Node/bridge/client versions, the failing command, and the relevant redacted status/error. Leave out tokens, credentials, and private conversations. More detail is in the [technical reference](https://github.com/danyiimp/codex-mcp-bridge/blob/main/REFERENCE.md#troubleshooting).
 
 ## Development
 
@@ -382,6 +347,6 @@ npm ci
 npm test
 ```
 
-On Windows, use `node --test --test-concurrency=2` (also avoids npm versions that reject forwarded flags). CI tests Node 22 and 24 on Linux, macOS, and Windows. Tests use isolated fixtures and do not spend model quota. For the optional telemetry endpoint, also run `deno test --allow-env supabase/functions/bridge-usage/contract-check.ts`.
+On Windows, use `node --test --test-concurrency=2` (also avoids npm versions that reject forwarded flags). CI tests Node 22 and 24 on Linux, macOS, and Windows. Tests use isolated fixtures and do not spend model quota. The fork does not start upstream telemetry reporting.
 
 [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [MIT license](LICENSE)

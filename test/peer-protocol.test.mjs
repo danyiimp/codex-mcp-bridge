@@ -363,7 +363,7 @@ describe("transcript reading", () => {
     fs.writeFileSync(path.join(projectDir, "abc.jsonl"), `${lines.join("\n")}\n`);
 
     const { file, messages } = readTranscript("abc", "/mnt/dev_disk/codex-mcp-bridge", 10);
-    assert.equal(file, path.join(projectDir, "abc.jsonl"));
+    assert.equal(fs.realpathSync(file), fs.realpathSync(path.join(projectDir, "abc.jsonl")));
     assert.deepEqual(
       messages.map((m) => m.text),
       ["first", "second", "third"],

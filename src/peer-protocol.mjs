@@ -9,6 +9,7 @@ import { homeDir, IS_WINDOWS } from "./platform.mjs";
 import { cloneReloadState } from "./reload-control.mjs";
 import { hardenedBridgeEnabled } from "./hardened-root-policy.mjs";
 import { protectCurrentUserPipe } from "./windows-pipe-acl.mjs";
+import { discoverClaudeDataDirs } from "./claude-config-dirs.mjs";
 
 const SOCKET_DIR = "/tmp/cc-socks";
 
@@ -30,8 +31,15 @@ const PEER_PROTOCOL_VERSION = 1;
 const CLAUDE_VERSION_HINT = "2.1.229";
 const PS_BIN = "/bin/ps";
 
-const sessionsDir = () => path.join(homeDir(), ".claude", "sessions");
-const projectsDir = () => path.join(homeDir(), ".claude", "projects");
+const claudeConfigDir = () => process.env.CLAUDE_CONFIG_DIR ?? path.join(homeDir(), ".claude");
+const sessionsDir = () => path.join(claudeConfigDir(), "sessions");
+const projectsDir = () => path.join(claudeConfigDir(), "projects");
+const sessionsDirs = () => discoverClaudeDataDirs("sessions").directories.map(row => row.path);
+const projectsDirs = () => discoverClaudeDataDirs("projects").directories.map(row => row.path);
+function directoryFiles(directory, warnings) {
+  try { return fs.readdirSync(directory); }
+  catch (error) { warnings?.push({ path: directory, code: error.code ?? "UNREADABLE" }); return []; }
+}
 
 /**
  * A Claude Code session advertises itself in ~/.claude/sessions/<pid>.json and
@@ -75,7 +83,7 @@ function decodePeerAddress(from) {
   catch { return null; }
 }
 
-export function peerKeyPath(pid, socket) {
+export function peerKeyPath(pid, socket, dir = sessionsDir()) {
   const pipe = /^[\\/]{2}[.?][\\/]pipe[\\/](?:(LOCAL)[\\/])?([^\\/]+)$/i.exec(socket);
   let canonical;
   if (pipe && !/[. ]$/.test(pipe[2]) && ![".", ".."].includes(pipe[2])) {
@@ -85,7 +93,7 @@ export function peerKeyPath(pid, socket) {
   } else {
     throw new Error("Refusing a non-local or non-canonical peer socket");
   }
-  return path.join(sessionsDir(), `${pid}.${crypto.createHash("sha256").update(canonical).digest("hex")}.key`);
+  return path.join(dir, `${pid}.${crypto.createHash("sha256").update(canonical).digest("hex")}.key`);
 }
 
 function readPeerToken(socket) {
@@ -99,7 +107,7 @@ function readPeerToken(socket) {
     return null;
   }
   try {
-    const key = JSON.parse(fs.readFileSync(peerKeyPath(candidates[0].pid, socket), "utf8"));
+    const key = JSON.parse(fs.readFileSync(peerKeyPath(candidates[0].pid, socket, candidates[0].dir), "utf8"));
     if (typeof key.peerToken !== "string" || !/^[0-9a-f]{32}$/i.test(key.peerToken)) throw new Error("Invalid peer key");
     const identity = readPeerProcessIdentity(key);
     const hasIdentity = Object.hasOwn(key, "procStart") || (IS_WINDOWS && Object.hasOwn(key, "procStartFt"));
@@ -190,11 +198,12 @@ function hasMessagingEndpoint(entry) {
 
 export const BRIDGE_ENTRYPOINT = "codex-bridge";
 
-export function listClaudeSessions({ includeDead = false, includeBridges = false } = {}) {
-  const dir = sessionsDir();
-  if (!fs.existsSync(dir)) return [];
+export function listClaudeSessions({ includeDead = false, includeBridges = false, diagnostics } = {}) {
+  const discovery = discoverClaudeDataDirs("sessions");
+  if (diagnostics) Object.assign(diagnostics, discovery);
   const rows = [];
-  for (const file of fs.readdirSync(dir)) {
+  const seen = new Set();
+  for (const { path: dir, sources } of discovery.directories) for (const file of directoryFiles(dir, diagnostics?.warnings)) {
     if (!file.endsWith(".json")) continue;
     const entry = readSessionEntry(path.join(dir, file));
     if (!entry) continue;
@@ -205,6 +214,11 @@ export function listClaudeSessions({ includeDead = false, includeBridges = false
     let processStart;
     try { processStart = readPeerProcessIdentity(entry); }
     catch { continue; }
+    // Keep conflicting identities visible so exact selection can refuse them.
+    // A stale registration in another profile must not hide the current UUID.
+    const identity = JSON.stringify([entry.pid, entry.sessionId, entry.messagingSocketPath, entry.procStartFt ?? entry.procStart]);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
     rows.push({
       pid: entry.pid,
       name: entry.name ?? null,
@@ -216,6 +230,9 @@ export function listClaudeSessions({ includeDead = false, includeBridges = false
       startedAt: entry.startedAt ?? null,
       processStart,
       socket: entry.messagingSocketPath,
+      dir,
+      registryFile: path.join(dir, file),
+      profileSources: sources,
       alive,
     });
   }
@@ -272,6 +289,12 @@ export function assertClaudeSessionProcess(session) {
     throw new Error("The live Claude process identity could not be read, so this send was refused rather than sent unverified. That failure is not itself evidence the session changed; inspect the existing Desktop task before retrying.");
   }
   if (current !== session.processStart) throw new Error(changed);
+  if (session.registryFile) {
+    const current = readSessionEntry(session.registryFile);
+    if (!current || current.pid !== session.pid || current.sessionId !== session.sessionId || current.messagingSocketPath !== session.socket || !hasMessagingEndpoint(current)) {
+      throw new Error("The Claude session registry changed since discovery. No message was sent; rediscover its current session ID.");
+    }
+  }
 }
 
 /**
@@ -281,13 +304,13 @@ export function assertClaudeSessionProcess(session) {
  * rather than by reconstructing the slug.
  */
 function findTranscriptFile(sessionId, cwd) {
-  const dir = projectsDir();
-  const guess = path.join(dir, String(cwd ?? "").replace(/[^a-zA-Z0-9]/g, "-"), `${sessionId}.jsonl`);
-  if (fs.existsSync(guess)) return guess;
-  if (!fs.existsSync(dir)) return guess;
-  for (const project of fs.readdirSync(dir)) {
-    const candidate = path.join(dir, project, `${sessionId}.jsonl`);
-    if (fs.existsSync(candidate)) return candidate;
+  const slug = String(cwd ?? "").replace(/[^a-zA-Z0-9]/g, "-");
+  const guess = path.join(projectsDir(), slug, `${sessionId}.jsonl`);
+  for (const dir of projectsDirs()) {
+    for (const project of new Set([slug, ...directoryFiles(dir)])) {
+      const candidate = path.join(dir, project, `${sessionId}.jsonl`);
+      if (fs.existsSync(candidate)) return candidate;
+    }
   }
   return guess;
 }
@@ -444,9 +467,7 @@ export class PeerEndpoint {
    * leftovers of previous bridge runs before advertising this one.
    */
   #sweepDeadBridges() {
-    const dir = sessionsDir();
-    if (!fs.existsSync(dir)) return;
-    for (const file of fs.readdirSync(dir)) {
+    for (const dir of sessionsDirs()) for (const file of directoryFiles(dir)) {
       if (!file.endsWith(".json")) continue;
       const registry = path.join(dir, file);
       const entry = readSessionEntry(registry);

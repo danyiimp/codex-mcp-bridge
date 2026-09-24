@@ -10,7 +10,7 @@ const footerPath = fileURLToPath(new URL("../scripts/npm-footer.ps1", import.met
 const pwshProbe = spawnSync("pwsh", ["-NoProfile", "-Command", "(Get-Process -Id $PID).Path"], { encoding: "utf8", timeout: 20000 });
 const missingPwsh = pwshProbe.error?.code === "ENOENT";
 const pwshExecutable = pwshProbe.stdout?.trim() || "pwsh";
-const packageName = "@minhspark/codex-mcp-bridge";
+const packageName = "@danyiimp/codex-mcp-bridge";
 const target = `${packageName}@latest`;
 
 const fakeNpm = `#!/usr/bin/env node
@@ -49,12 +49,12 @@ for (const argument of args) {
   if (["--no-dry-run", "--dry-run=false"].includes(argument)) dryRun = false;
 }
 if (exitCode === 0 && !dryRun && ["install", "i"].includes(args[0])) {
-  const metadata = path.join(root, "@minhspark", "codex-mcp-bridge", "package.json");
+  const metadata = path.join(root, "@danyiimp", "codex-mcp-bridge", "package.json");
   const after = process.env.BRIDGE_FOOTER_AFTER || "1.13.2";
   fs.mkdirSync(path.dirname(metadata), { recursive: true });
   if (after === "missing") fs.rmSync(metadata, { force: true });
   else if (after === "invalid") fs.writeFileSync(metadata, "{");
-  else fs.writeFileSync(metadata, JSON.stringify({ name: "@minhspark/codex-mcp-bridge", version: after }));
+  else fs.writeFileSync(metadata, JSON.stringify({ name: "@danyiimp/codex-mcp-bridge", version: after }));
 }
 process.exit(exitCode);
 `;
@@ -80,7 +80,7 @@ function runFooter({ args = ["install", "-g", target], before, env = {}, applica
       fs.writeFileSync(path.join(binDirectory, "npm.ps1"), "& $env:BRIDGE_FOOTER_NODE (Join-Path $PSScriptRoot 'fake-npm.mjs') @args\nexit $LASTEXITCODE\n");
     }
     if (before !== undefined) {
-      const metadataPath = path.join(effectiveRoot, "@minhspark", "codex-mcp-bridge", "package.json");
+      const metadataPath = path.join(effectiveRoot, "@danyiimp", "codex-mcp-bridge", "package.json");
       fs.mkdirSync(path.dirname(metadataPath), { recursive: true });
       fs.writeFileSync(metadataPath, before === "invalid" ? "{" : JSON.stringify({ name: packageName, version: before }));
     }

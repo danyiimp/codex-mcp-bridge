@@ -26,8 +26,7 @@ import { AGENT_PROMPT_GUIDANCE, PROMPT_FIELD_HINT } from "./prompt-guidance.mjs"
 
 exitForVersionRequest(import.meta.url);
 
-const VERSION = "1.18.0";
-void import("./telemetry.mjs").then(({ startUsageReporting }) => startUsageReporting({ version: VERSION })).catch(() => {});
+const VERSION = "1.18.0-csb.1";
 const FORWARD_MIN_INTERVAL_MS = 5000;
 const FORWARD_MAX_PER_SESSION = 50;
 

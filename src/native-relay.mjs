@@ -46,6 +46,10 @@ export const ACCOUNT_RELAY_PROTOCOL_VERSION = 2;
  * and the companion refuses to accumulate one.
  */
 export const MAX_FRAME_BYTES = 128 * 1024;
+// Desktop read responses can include inline generated images. Accept them only
+// on the native response leg; the companion compacts thread reads before relay.
+// Outbound requests and the local relay remain capped by MAX_FRAME_BYTES.
+export const MAX_NATIVE_RESPONSE_BYTES = 64 * 1024 * 1024;
 
 const DEFAULT_TIMEOUT_MS = 30000;
 const RELAY_SOCKET_NAME = "native-relay.sock";
@@ -516,6 +520,38 @@ async function probeWindowsNativeToolsPipe(socketPath, { env, timeoutMs }) {
   }
 }
 
+// New Desktop releases supply the pipe in the app-server environment rather
+// than a -c mcp_servers.codex_app override. MCP's environment allowlist can omit
+// it. Read only the verified direct Desktop ancestor (or our one supervisor),
+// never scan unrelated processes or guess a socket from /tmp.
+export function nativeToolsPipeFromProcessEnvironment(commandLine, environmentLine) {
+  if (typeof commandLine !== "string" || /[\r\n\0]/.test(commandLine)) return null;
+  const args = splitDesktopCommandLine(commandLine, process.platform);
+  if (path.basename(args[0] ?? "") !== "codex") return null;
+  let appServer = false;
+  for (let i = 1; i < args.length; i++) {
+    if (args[i] === "-c" || args[i] === "--config") { i++; continue; }
+    if (args[i].startsWith("-")) continue;
+    appServer = args[i] === "app-server";
+    break;
+  }
+  if (!appServer || typeof environmentLine !== "string" || !environmentLine.startsWith(`${commandLine} `)) return null;
+  const environment = environmentLine.slice(commandLine.length);
+  const matches = [...environment.matchAll(/(?:^|\s)CODEX_APP_TOOLS_PIPE_PATH=([^\s]+)/g)];
+  if (matches.length !== 1 || !path.posix.isAbsolute(matches[0][1]) || /[\r\n\0]/.test(matches[0][1])) return null;
+  return matches[0][1];
+}
+
+async function readProcessParentPid(pid) {
+  const { stdout } = await execFileAsync("/bin/ps", ["-p", String(pid), "-o", "ppid="], { timeout: 5000 });
+  return Number(stdout.trim());
+}
+
+async function readProcessEnvironmentLine(pid) {
+  const { stdout } = await execFileAsync("/bin/ps", ["eww", "-p", String(pid), "-o", "command="], { timeout: 5000, maxBuffer: 1024 * 1024 });
+  return stdout.trim();
+}
+
 export async function resolveNativeToolsPipePath({
   env = process.env,
   parentPid = process.ppid,
@@ -524,25 +560,50 @@ export async function resolveNativeToolsPipePath({
   readWindowsSnapshot = readWindowsNativePipeSnapshot,
   probeWindowsPipe = probeWindowsNativeToolsPipe,
   windowsDiscoveryTimeoutMs = 7000,
+  readParentPid = readProcessParentPid,
+  readEnvironmentLine = readProcessEnvironmentLine,
 } = {}) {
   if (env.CODEX_APP_TOOLS_PIPE_PATH) return env.CODEX_APP_TOOLS_PIPE_PATH;
+  let command;
   try {
-    const inherited = nativeToolsPipeFromCommandLine(await readParent(parentPid, platform), { platform });
+    command = await readParent(parentPid, platform);
+    const inherited = nativeToolsPipeFromCommandLine(command, { platform });
     if (inherited) return inherited;
   } catch {}
-  if (platform !== "win32") return null;
-  const deadline = Date.now() + Math.max(1, Math.min(7000, Number(windowsDiscoveryTimeoutMs) || 7000));
+  if (platform === "win32") {
+    const deadline = Date.now() + Math.max(1, Math.min(7000, Number(windowsDiscoveryTimeoutMs) || 7000));
+    try {
+      const candidates = nativeToolsPipeCandidatesFromWindowsSnapshot(await readWindowsSnapshot(parentPid), { parentPid, localAppData: env.LOCALAPPDATA }) ?? [];
+      for (const candidate of candidates) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+        try {
+          if (await probeWindowsPipe(candidate, { env, timeoutMs: Math.min(750, remaining) })) return candidate;
+        } catch {}
+      }
+      return null;
+    } catch { return null; }
+  }
+  if (platform !== "darwin") return null;
   try {
-    const candidates = nativeToolsPipeCandidatesFromWindowsSnapshot(await readWindowsSnapshot(parentPid), { parentPid, localAppData: env.LOCALAPPDATA }) ?? [];
-    for (const candidate of candidates) {
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) break;
-      try {
-        if (await probeWindowsPipe(candidate, { env, timeoutMs: Math.min(750, remaining) })) return candidate;
-      } catch {}
+    const args = splitDesktopCommandLine(command ?? "", platform);
+    if (path.basename(args[0] ?? "") === "node" && args.length === 3
+        && args[1]?.endsWith("/src/mcp-supervisor.mjs") && args[2] === "native-relay-companion.mjs") {
+      parentPid = await readParentPid(parentPid);
+      if (!Number.isSafeInteger(parentPid) || parentPid <= 1) return null;
+      command = await readParent(parentPid, platform);
+      const configured = nativeToolsPipeFromCommandLine(command, { platform });
+      if (configured) return configured;
     }
+    // Reject non-Desktop ancestors before accessing any process environment.
+    if (!nativeToolsPipeFromProcessEnvironment(command, `${command} CODEX_APP_TOOLS_PIPE_PATH=/validation`)) return null;
+    const candidate = nativeToolsPipeFromProcessEnvironment(command, await readEnvironmentLine(parentPid));
+    if (!candidate) return null;
+    const stat = fs.lstatSync(candidate);
+    return stat.isSocket() && stat.uid === process.getuid() && (stat.mode & 0o077) === 0 ? candidate : null;
+  } catch {
     return null;
-  } catch { return null; }
+  }
 }
 
 export class NativeToolsClient {
@@ -607,7 +668,7 @@ export class NativeToolsClient {
         buffer = Buffer.concat([buffer, chunk]);
         while (buffer.length >= 4) {
           const length = buffer.readUInt32LE(0);
-          if (!length || length > MAX_FRAME_BYTES) {
+          if (!length || length > MAX_NATIVE_RESPONSE_BYTES) {
             fail(new NativeRelayError("Invalid Codex Desktop native frame length", "NATIVE_BAD_RESPONSE"));
             return;
           }

@@ -9,7 +9,7 @@
   "activationEvents": ["onStartupFinished"],
   "main": "./extension.cjs",
   "license": "MIT",
-  "repository": { "type": "git", "url": "https://github.com/buidangminh23/codex-mcp-bridge" },
+  "repository": { "type": "git", "url": "https://github.com/danyiimp/codex-mcp-bridge" },
   "contributes": {
     "commands": [{ "command": "liveFileReveal.toggle", "title": "Live File Reveal: Toggle" }],
     "configuration": {

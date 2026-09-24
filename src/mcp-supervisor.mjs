@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { createReleaseSnapshot, sourceRevision } from "./release-snapshot.mjs";
 import { desktopTasksConfigured } from "./native-relay.mjs";
 
-const ENTRIES = new Set(["index.mjs", "claude-bridge.mjs", "native-relay-companion.mjs"]);
+const ENTRIES = new Set(["index.mjs", "claude-bridge.mjs", "native-relay-companion.mjs", "cross-session-bridge.mjs"]);
 const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 const MAX_QUEUE = 256;
 const hasId = (message) => Object.hasOwn(message, "id");
@@ -121,7 +121,7 @@ class Worker {
 }
 
 export async function runSupervisor(entry, options = {}) {
-  if (!ENTRIES.has(entry)) throw new Error("Expected index.mjs, claude-bridge.mjs, or native-relay-companion.mjs");
+  if (!ENTRIES.has(entry)) throw new Error("Unsupported bridge worker entry point");
   const root = fs.realpathSync.native(options.root ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."));
   if (process.argv.includes("--version") || process.argv.includes("-v")) {
     process.stdout.write(`${JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).version}\n`);
@@ -130,7 +130,7 @@ export async function runSupervisor(entry, options = {}) {
   const log = (message) => process.stderr.write(`[bridge-supervisor] ${message}\n`);
   const output = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
   const env = { ...process.env, CODEX_BRIDGE_SOURCE_ROOT: root };
-  const routingConfiguration = () => entry === "native-relay-companion.mjs" ? null : desktopTasksConfigured(env);
+  const routingConfiguration = () => ["native-relay-companion.mjs", "cross-session-bridge.mjs"].includes(entry) ? null : desktopTasksConfigured(env);
   if (entry === "native-relay-companion.mjs" && !env.CODEX_APP_TOOLS_PIPE_PATH) {
     const { resolveNativeToolsPipePath } = await import("./native-relay.mjs");
     const pipe = await resolveNativeToolsPipePath();
@@ -184,7 +184,7 @@ export async function runSupervisor(entry, options = {}) {
           await worker.control("activate");
           ready = true;
         }
-        if (message.result && ["codex_bridge_status", "claude_bridge_status", "native_relay_status"].includes(pending.tool)) {
+        if (message.result && ["codex_bridge_status", "claude_bridge_status", "native_relay_status", "bridge_status"].includes(pending.tool)) {
           message.result.structuredContent = { ...message.result.structuredContent, autoReload: diagnostics() };
           message.result.content = [...(message.result.content ?? []), { type: "text", text: `automatic reload: ${diagnostics().state}\nsupervisor pid: ${process.pid}\nworker pid: ${worker.process.pid}\nreload count: ${reloads}${reason ? `\nreload detail: ${reason}` : ""}` }];
         }

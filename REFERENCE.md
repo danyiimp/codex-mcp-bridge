@@ -127,26 +127,26 @@ Two ways in. Pick by what you intend to do with it.
 **Install it — no clone, no checkout to keep in sync.** Right for a machine that only has to run the bridge:
 
 ```bash
-npm install -g @minhspark/codex-mcp-bridge
+npm install -g github:danyiimp/codex-mcp-bridge#v1.18.0-csb.1
 ```
 
 Already installed? The same command with `@latest` upgrades it in place. Once the supervisor is registered, compatible updates load automatically without restarting the client. Details in [Upgrading an install you already have](#upgrading-an-install-you-already-have):
 
 ```bash
-npm install -g @minhspark/codex-mcp-bridge@latest
+npm install -g github:danyiimp/codex-mcp-bridge#v1.18.0-csb.1
 ```
 
 Installing straight from the repository works the same way and needs no registry account:
 
 ```bash
-npm install -g git+https://github.com/buidangminh23/codex-mcp-bridge.git
+npm install -g git+https://github.com/danyiimp/codex-mcp-bridge.git#v1.18.0-csb.1
 ```
 
 Either route puts the bridge servers, configuration installers, native relay, and `codex-npm-footer-install` on your PATH. Wherever this README runs `node scripts/install-claude-desktop.mjs`, an installed copy runs `codex-mcp-bridge-install` instead. Every packaged command supports `--version` and `-v` without starting a server or changing configuration.
 
 #### Upgrading an install you already have
 
-Install the new files with `npm install -g @minhspark/codex-mcp-bridge@latest`. To migrate an existing direct-entry installation, run `codex-mcp-bridge-install` for Claude Desktop, `claude-mcp-bridge-install` for Codex, and `codex-native-relay-install --no-bootstrap` if the native companion is installed. Update Claude Code's separate registration as shown below. Reconnect each MCP server once in its existing task so it loads the supervisor. No replacement task or full app exit is required when the client exposes MCP reconnect/reload. A process launched before this upgrade cannot acquire the supervisor merely because files changed on disk.
+Install the new files with `npm install -g github:danyiimp/codex-mcp-bridge#v1.18.0-csb.1`. To migrate an existing direct-entry installation, run `codex-mcp-bridge-install` for Claude Desktop, `claude-mcp-bridge-install` for Codex, and `codex-native-relay-install --no-bootstrap` if the native companion is installed. Update Claude Code's separate registration as shown below. Reconnect each MCP server once in its existing task so it loads the supervisor. No replacement task or full app exit is required when the client exposes MCP reconnect/reload. A process launched before this upgrade cannot acquire the supervisor merely because files changed on disk.
 
 After this one-time migration, the stable supervisor keeps the client's MCP stdio connection open while it starts each worker from an immutable source snapshot. The installers prepare this snapshot before changing the registration, avoiding a slow first copy during MCP initialization. Compatible installed-source changes become candidates after the tree stabilizes. A candidate must initialize successfully before it can replace an idle worker. Active calls, pending deliveries, late replies, and relay work defer the switch; an update never silently resends a prompt. A failed candidate leaves the existing worker and its delivery state available.
 
@@ -175,14 +175,14 @@ Use `--shell bash` on Bash or `--shell powershell` in PowerShell 7. A source che
 The integration leaves the command unchanged:
 
 ```sh
-npm install -g @minhspark/codex-mcp-bridge@latest
+npm install -g github:danyiimp/codex-mcp-bridge#v1.18.0-csb.1
 ```
 
 | Measured result | Final line |
 | --- | --- |
-| No previous installation | `Successfully installed: @minhspark/codex-mcp-bridge v<version>` |
-| Version changed | `Successfully updated: @minhspark/codex-mcp-bridge v<before> -> v<after>` |
-| Same version after reinstalling | `Already up to date: @minhspark/codex-mcp-bridge v<version>` |
+| No previous installation | `Successfully installed: @danyiimp/codex-mcp-bridge v<version>` |
+| Version changed | `Successfully updated: @danyiimp/codex-mcp-bridge v<before> -> v<after>` |
+| Same version after reinstalling | `Already up to date: @danyiimp/codex-mcp-bridge v<version>` |
 | npm failed | `Failed to install: ... (exit code <code>). See npm error above.` |
 | Dry run | `Dry run completed: ... (no changes applied).` |
 | Mode or installed metadata cannot be verified | A warning instead of a success claim |
@@ -192,7 +192,7 @@ The footer runs after npm finishes and keeps npm's output and exit code. It supp
 **Clone it** — right if you intend to read, test or change the code:
 
 ```bash
-git clone https://github.com/buidangminh23/codex-mcp-bridge.git
+git clone https://github.com/danyiimp/codex-mcp-bridge.git
 cd codex-mcp-bridge
 npm install
 ```

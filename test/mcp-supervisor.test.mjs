@@ -6,7 +6,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { it } from "node:test";
 import { randomUUID } from "node:crypto";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
+import { buildFrame } from "../src/peer-protocol.mjs";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ListRootsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -102,7 +103,7 @@ async function eventually(read, predicate, errorDetails = () => "") {
   assert.fail(`Reload did not settle: ${JSON.stringify(value)} ${errorDetails()}`);
 }
 
-for (const entry of ["index.mjs", "claude-bridge.mjs", "native-relay-companion.mjs"]) {
+for (const entry of ["index.mjs", "claude-bridge.mjs", "native-relay-companion.mjs", "cross-session-bridge.mjs"]) {
   it(`reloads ${entry} on the same MCP connection and retains completed state`, async t => {
     const fixture = installation(t, entry);
     const api = await connect(t, fixture);
@@ -354,12 +355,12 @@ it("resolves cache parent aliases before launching an immutable worker", t => {
   assert.equal(snapshot.directory.startsWith(fs.realpathSync.native(parent) + path.sep), true);
 });
 
-for (const [entry, statusName] of [["index.mjs", "codex_bridge_status"], ["claude-bridge.mjs", "claude_bridge_status"], ["native-relay-companion.mjs", "native_relay_status"]]) {
+for (const [entry, statusName] of [["index.mjs", "codex_bridge_status"], ["claude-bridge.mjs", "claude_bridge_status"], ["native-relay-companion.mjs", "native_relay_status"], ["cross-session-bridge.mjs", "bridge_status"]]) {
   it(`upgrades the real ${entry} without reconnecting its MCP client`, {timeout:180000}, async t => {
     const fixture = installation(t, entry);
     fs.cpSync(path.join(repository, "src"), path.join(fixture.root, "src"), {recursive:true});
     fs.copyFileSync(path.join(repository,"package.json"),path.join(fixture.root,"package.json"));
-    fs.cpSync(path.join(repository,"node_modules"),path.join(fixture.root,"node_modules"),{recursive:true});
+    fs.cpSync(fs.realpathSync.native(path.join(repository,"node_modules")),path.join(fixture.root,"node_modules"),{recursive:true,mode:fs.constants.COPYFILE_FICLONE});
     const prefix = process.platform === "win32" ? `\\\\.\\pipe\\supervisor-${randomUUID()}` : path.join("/tmp",`supervisor-${randomUUID()}.sock`);
     const sockets = new Set();
     const native = net.createServer(socket => { sockets.add(socket); socket.on("close",()=>sockets.delete(socket)); });
@@ -369,6 +370,19 @@ for (const [entry, statusName] of [["index.mjs", "codex_bridge_status"], ["claud
     // Prewarming keeps this real-worker fixture faithful to that lifecycle while
     // retaining the unchanged MCP initialization and reload deadlines.
     createReleaseSnapshot(fixture.root,{cache:path.join(fixture.root,"cache")});
+    if (entry === 'cross-session-bridge.mjs') {
+      const relay = net.createServer(socket => {
+        let buffer = '';
+        socket.on('data', data => {
+          buffer += data;
+          if (!buffer.includes('\n')) return;
+          const request = JSON.parse(buffer.split('\n')[0]);
+          socket.end(JSON.stringify({ ok: true, v: request.v, operation: request.operation, result: { threads: [], pinnedThreads: [] } }) + '\n');
+        });
+      });
+      await new Promise(resolve => relay.listen(`${prefix}-relay`, resolve));
+      t.after(() => new Promise(resolve => relay.close(resolve)));
+    }
     const api = await connect(t,fixture,{
       HOME: fixture.root, USERPROFILE: fixture.root, CODEX_HOME: path.join(fixture.root,".codex"), APPDATA:path.join(fixture.root,"Roaming"),
       LOCALAPPDATA:path.join(fixture.root,"Local"), CODEX_BRIDGE_AUTOSTART:"0", CODEX_BRIDGE_DESKTOP_TASKS:"0",
@@ -376,6 +390,17 @@ for (const [entry, statusName] of [["index.mjs", "codex_bridge_status"], ["claud
     });
     const before=await api.call(statusName);
     assert.equal(before.structuredContent.autoReload.enabled,true);
+    if (entry === 'cross-session-bridge.mjs') {
+      assert.equal((await api.call('list_claude_sessions')).structuredContent.sessions.length, 0);
+      const directory = path.join(fixture.root, '.ccs/instances/work/sessions');
+      fs.mkdirSync(directory, { recursive: true });
+      fs.writeFileSync(path.join(directory, `${process.pid}.json`), JSON.stringify({pid:process.pid, sessionId:'ccs-profile-session', name:'sample-peer', entrypoint:'cli', messagingSocketPath:prefix}));
+      const discovered = await api.call('list_claude_sessions');
+      assert.equal(discovered.structuredContent.sessions[0].sessionId, 'ccs-profile-session');
+      assert(discovered.structuredContent.sessions[0].profileSources.includes('CCS:work'));
+      const refused = await api.call('send_to_claude_session', {target:'ccs-profile-session',message:'MUST_NOT_SEND_WITHOUT_SOURCE'});
+      assert.equal(refused.isError, true);
+    }
     fs.appendFileSync(path.join(fixture.root,"src",entry),"\n");
     const after=await eventually(()=>api.call(statusName),value=>value.structuredContent?.autoReload?.reloads === 1,api.stderr);
     assert.equal(after.structuredContent.autoReload.supervisorPid,before.structuredContent.autoReload.supervisorPid);
@@ -384,3 +409,92 @@ for (const [entry, statusName] of [["index.mjs", "codex_bridge_status"], ["claud
     if (entry === "native-relay-companion.mjs") assert.match(after.content[0].text, /account relay:.*\(protocol 2, listening\)/);
   });
 }
+
+for (const threadSource of ['user', 'agent_created_thread']) it(`retains a real cross-session reply from ${threadSource}, sender binding and receipts across a deferred reload`, { timeout: 60000, skip: process.platform === 'win32' }, async t => {
+  // All identities, registries and Desktop dispatches below belong to this isolated fixture.
+  const fixture = installation(t, 'cross-session-bridge.mjs');
+  fs.cpSync(path.join(repository, 'src'), path.join(fixture.root, 'src'), { recursive: true });
+  fs.copyFileSync(path.join(repository, 'package.json'), path.join(fixture.root, 'package.json'));
+  fs.cpSync(fs.realpathSync.native(path.join(repository, 'node_modules')), path.join(fixture.root, 'node_modules'), { recursive: true, mode: fs.constants.COPYFILE_FICLONE });
+  const threadId = randomUUID(), turnId = randomUUID(), claudeId = randomUUID();
+  const prefix = `/tmp/ccs-reload-${randomUUID()}`;
+  const socketPath = `${prefix}.sock`, relayPath = `${prefix}-relay.sock`;
+  const relayMessages = [], received = [];
+  const relay = net.createServer(socket => {
+    let buffer = '';
+    socket.on('data', data => {
+      buffer += data;
+      if (!buffer.includes('\n')) return;
+      const request = JSON.parse(buffer.split('\n')[0]);
+      if (request.targetThreadId) relayMessages.push(request);
+      const result = request.operation === 'read_thread'
+        ? { thread: { id: threadId, title: 'fixture-task', kind: 'codex', hostId: 'local' } }
+        : { pinnedThreads: [], threads: [] };
+      socket.end(JSON.stringify({ ok: true, v: request.v, operation: request.operation, result }) + '\n');
+    });
+  });
+  const receiver = net.createServer(socket => {
+    let buffer = '';
+    socket.on('data', data => { buffer += data; });
+    socket.on('end', () => {
+      for (const line of buffer.trim().split('\n')) {
+        const frame = JSON.parse(line);
+        if (frame.type === 'user') received.push(frame);
+      }
+    });
+  });
+  await Promise.all([new Promise(resolve => receiver.listen(socketPath, resolve)), new Promise(resolve => relay.listen(relayPath, resolve))]);
+  t.after(async () => { await Promise.all([new Promise(resolve => receiver.close(resolve)), new Promise(resolve => relay.close(resolve))]); });
+  const registry = path.join(fixture.root, '.ccs/instances/work/sessions');
+  fs.mkdirSync(registry, { recursive: true });
+  const procStart = execFileSync('/bin/ps', ['-o','lstart=','-p',String(process.pid)], { env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' } }).toString().trim();
+  fs.writeFileSync(path.join(registry, `${process.pid}.json`), JSON.stringify({ pid:process.pid, sessionId:claudeId, procStart, name:'fixture-claude', cwd:fixture.root, entrypoint:'cli', messagingSocketPath:socketPath }));
+  const sessions = path.join(fixture.root, '.codex/sessions/2026/09/09');
+  fs.mkdirSync(sessions, { recursive: true });
+  const events = [
+    {type:'session_meta',payload:{id:threadId,originator:'codex_work_desktop',source:'vscode',cwd:fixture.root}},
+    {type:'turn_context',payload:{turn_id:turnId,cwd:fixture.root,approval_policy:'never',approvals_reviewer:'user',permission_profile:{type:'disabled'},sandbox_policy:{type:'danger-full-access'}}},
+    {type:'event_msg',payload:{type:'task_started',turn_id:turnId}},
+  ];
+  fs.writeFileSync(path.join(sessions, `rollout-${threadId}.jsonl`), events.map(JSON.stringify).join('\n')+'\n');
+  const api = await connect(t, fixture, { HOME:fixture.root, USERPROFILE:fixture.root, CLAUDE_CONFIG_DIR:'', CCS_HOME:'', CCS_DIR:'', CODEX_NATIVE_RELAY_SOCKET:relayPath });
+  const meta = {'x-codex-turn-metadata':{thread_id:threadId,turn_id:turnId,thread_source:threadSource}};
+  const before = await api.call('bridge_status', {}, meta);
+  assert.equal(before.structuredContent.caller.verified, true);
+  for (const [label, overrides] of [
+    ['subagent source', {thread_source:'subagent'}],
+    ['unknown source', {thread_source:'unrecognized_source'}],
+    ['missing source', {thread_source:undefined}],
+    ['wrong turn', {turn_id:randomUUID()}],
+    ['missing turn', {turn_id:undefined}],
+  ]) {
+    const invalidMeta = {'x-codex-turn-metadata':{...meta['x-codex-turn-metadata'],...overrides}};
+    const refused = await api.call('send_to_claude_session', {target:claudeId,message:`MUST_NOT_SEND: ${label}`,wait_seconds:0}, invalidMeta);
+    assert.equal(refused.isError, true, `${label}: ${JSON.stringify(refused)}`);
+    assert.equal(received.length, 0, `${label} dispatched a Claude message`);
+    assert.equal(relayMessages.length, 0, `${label} dispatched a Desktop message`);
+  }
+  const sent = await api.call('send_to_claude_session', {target:claudeId,message:'send exactly once',wait_seconds:0}, meta);
+  assert.notEqual(sent.isError, true, JSON.stringify(sent));
+  const messageId = sent.structuredContent.messageId;
+  await eventually(async () => received, value => value.length === 1);
+  assert.match(received[0].message.content, /from-mode="bypass"/);
+  fs.appendFileSync(path.join(fixture.root, 'src/cross-session-bridge.mjs'), '\n');
+  const deferred = await eventually(() => api.call('bridge_status', {}, meta), value => value.structuredContent.autoReload.pending && value.structuredContent.autoReload.reason?.includes('unconfirmed'), api.stderr);
+  assert.equal(deferred.structuredContent.autoReload.workerPid, before.structuredContent.autoReload.workerPid);
+  const replyAddress = decodeURIComponent(received[0].from.slice(4));
+  const reply = buildFrame({text:'fixture reply',fromSocket:socketPath});
+  await new Promise((resolve,reject) => {
+    const connection = net.connect(replyAddress, () => connection.end(JSON.stringify(reply)+'\n',resolve));
+    connection.on('error',reject);
+  });
+  const after = await eventually(() => api.call('bridge_status', {}, meta), value => value.structuredContent.autoReload.reloads === 1, api.stderr);
+  assert.notEqual(after.structuredContent.autoReload.workerPid, before.structuredContent.autoReload.workerPid);
+  assert.equal(after.structuredContent.source.threadId, threadId);
+  const delivery = (await api.call('get_delivery', {message_id:messageId})).structuredContent;
+  assert.equal(delivery.receipt.reply, 'fixture reply');
+  assert.equal(delivery.forwarding.status, 'forwarded');
+  assert.equal(relayMessages.length, 1);
+  assert.equal(relayMessages[0].targetThreadId, threadId);
+  assert.equal(received.length, 1);
+});

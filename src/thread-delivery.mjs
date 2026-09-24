@@ -48,8 +48,9 @@ export function matchDesktopProject(projects, cwd, { canonicalize = realpathSync
 }
 
 export class DesktopTaskDelivery {
-  constructor({ relay = new NativeDesktopRelay({ socketPath: desktopTaskSocketPath(), accountSocketPath: accountRelaySocketPath() }), security, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), now = Date.now, receipts = new DesktopTaskReceipts(), beforeRequest, accountContext, captureResponse = captureCodexRolloutWatermark, readResponse = readCodexNativeTurnResponse, inspectResponse = inspectCodexNativeTurn } = {}) {
+  constructor({ relay = new NativeDesktopRelay({ socketPath: desktopTaskSocketPath(), accountSocketPath: accountRelaySocketPath() }), security, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), now = Date.now, receipts = new DesktopTaskReceipts(), beforeRequest, accountContext, captureResponse = captureCodexRolloutWatermark, readResponse = readCodexNativeTurnResponse, inspectResponse = inspectCodexNativeTurn, unassignedTasks = false } = {}) {
     this.relay = relay;
+    this.unassignedTasks = unassignedTasks;
     this.security = security;
     this.sleep = sleep;
     this.now = now;
@@ -186,6 +187,7 @@ export class DesktopTaskDelivery {
     }
     const observed = [...snapshot.pinnedThreads, ...snapshot.threads].filter((thread) => thread?.id === receipt.threadId && thread.kind === "codex" && thread.hostId === "local");
     if (observed.length === 0) return unverified("This task is absent from Desktop's recent/pinned listing.");
+    if (this.unassignedTasks && observed.every((thread) => thread.projectId === null)) return unverified("This task was started outside Desktop's create_thread (full access), so Desktop lists it under Tasks without a project assignment.");
     for (const thread of observed) {
       if (thread.projectId !== undefined && thread.projectId !== project.projectId) throw new Error(`Existing Desktop task ${receipt.threadId}'s project assignment changed. No prompt was resent and no duplicate task was created. Inspect its assignment in Codex Desktop.`);
       if (thread.cwd) {

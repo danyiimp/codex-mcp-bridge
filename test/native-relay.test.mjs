@@ -12,6 +12,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 
 import {
   MAX_FRAME_BYTES,
+  MAX_NATIVE_RESPONSE_BYTES,
   ACCOUNT_RELAY_PROTOCOL_VERSION,
   NATIVE_DISPATCH_METHOD,
   NativeToolsClient,
@@ -154,6 +155,59 @@ describe("Desktop project task delivery", () => {
       const response = await relay.requestDesktop("list_projects", {});
       assert.deepEqual(response.result.projects, [project]);
     } finally { server.stop(); }
+  });
+
+  it("compacts large native image read responses before the bounded relay leg", async () => {
+    const savedPath = "/tmp/generated/image-v2.png";
+    const finalText = `Saved the edited image at ${savedPath}`;
+    const read = {
+      thread: { id: "target", kind: "codex", hostId: "local", cwd: root, title: "Image edits" },
+      turns: [{
+        id: "turn-image", status: "completed",
+        items: [
+          { type: "imageGeneration", result: "A".repeat(2400000), savedPath },
+          { type: "agentMessage", text: finalText },
+        ],
+      }],
+      nextCursor: "older-turns",
+    };
+    let nativeRequests = 0;
+    const native = await nativePipe((request, socket) => {
+      nativeRequests++;
+      assert.equal(request.params.tool, "read_thread");
+      assert.deepEqual(request.params.arguments, { threadId: "target", includeOutputs: false });
+      const response = nativeFrame({ jsonrpc: "2.0", id: request.id, result: nativeResult(read) });
+      assert.ok(response.length > MAX_FRAME_BYTES);
+      assert.ok(response.length < MAX_NATIVE_RESPONSE_BYTES);
+      socket.write(response.subarray(0, 2));
+      socket.write(response.subarray(2));
+    });
+    const client = new NativeToolsClient({ socketPath: native.socketPath, timeoutMs: 2000 });
+    const server = new RelaySocketServer({
+      socketPath: tempSocket(), resolveExecutor: stubExecutor,
+      dispatchDesktop: (args, options) => client.dispatchDesktop(args, options),
+    });
+    await server.start();
+    try {
+      const relay = new NativeDesktopRelay({ socketPath: server.socketPath, timeoutMs: 2000 });
+      const response = await relay.requestDesktop("read_thread", { threadId: "target", includeOutputs: false });
+      assert.equal(response.ok, true);
+      assert.equal(response.result.thread.id, "target");
+      assert.equal(response.result.turns[0].id, "turn-image");
+      assert.equal(response.result.nextCursor, "older-turns");
+      const encoded = JSON.stringify(response);
+      assert.ok(Buffer.byteLength(encoded) < MAX_FRAME_BYTES);
+      assert.ok(encoded.includes(finalText));
+      assert.ok(encoded.includes(savedPath));
+      assert.equal(encoded.includes("A".repeat(100000)), false);
+      assert.equal(nativeRequests, 1);
+      assert.equal(client.pending.size, 0);
+    } finally {
+      server.stop();
+      await server.closed;
+      client.close();
+      await native.close();
+    }
   });
 
   it("creates in the saved checkout with explicit project assignment and no worktree", async () => {
@@ -575,6 +629,25 @@ describe("relay socket round trip", () => {
         return true;
       },
     );
+  });
+
+  it("retains the smaller response limit on the local relay socket", async () => {
+    const server = new RelaySocketServer({
+      socketPath: tempSocket(), resolveExecutor: stubExecutor,
+      dispatch: async () => ({ success: true, detail: "x".repeat(MAX_FRAME_BYTES) }),
+    });
+    await server.start();
+    try {
+      const relay = new NativeDesktopRelay({ socketPath: server.socketPath });
+      await assert.rejects(() => relay.sendMessage("target", "hello"), (error) => {
+        assert.equal(error.code, "RELAY_BAD_RESPONSE");
+        assert.equal(error.reachedCompanion, true);
+        return true;
+      });
+    } finally {
+      server.stop();
+      await server.closed;
+    }
   });
 
   /**
@@ -1735,7 +1808,7 @@ describe("native tools pipe protocol", () => {
 
   it("rejects malformed native frames and clears every pending request", async () => {
     const oversized = Buffer.alloc(4);
-    oversized.writeUInt32LE(MAX_FRAME_BYTES + 1);
+    oversized.writeUInt32LE(MAX_NATIVE_RESPONSE_BYTES + 1);
     const malformed = Buffer.concat([Buffer.from([1, 0, 0, 0]), Buffer.from("{")]);
     for (const response of [oversized, Buffer.alloc(4), malformed, nativeFrame({ id: 1, result: {} })]) {
       const native = await nativePipe((_request, socket) => socket.write(response));

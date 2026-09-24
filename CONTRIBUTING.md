@@ -74,45 +74,16 @@ project. Whatever a contributor has to obey belongs in this repo, in English.
 
 ## Releasing
 
-`.github/workflows/publish.yml` publishes on a `v*` tag and authenticates with
-npm through OIDC trusted publishing. **There is no access token in this
-repository and none needs to be added.**
-
-One gap belongs to npm rather than to this project: a trusted publisher can
-only be configured on a package that already exists, so the first release of a
-name cannot use OIDC. Publish that one by hand, once:
-
-```bash
-npm login
-npm publish --access public
-```
-
-Then on npmjs.com open the package, go to Settings, and add a GitHub Actions
-trusted publisher:
-
-| Field | Value |
-|---|---|
-| Organization or user | the account that owns this repository |
-| Repository | `codex-mcp-bridge` |
-| Workflow filename | `publish.yml` |
-| Environment | leave empty |
-
-Every release after that is a tag:
-
-```bash
-npm version minor      # or patch / major
-git push --follow-tags
-```
+Fork releases use a version tag matching `package.json`, such as
+`v1.18.0-csb.1`. Run `npm test` and `npm pack` before tagging, then publish a
+GitHub release with the resulting tarball. The
+`.github/workflows/github-packages.yml` workflow publishes the tagged version
+to GitHub Packages after its own test run. This fork has no npmjs.com publish
+workflow.
 
 `npm version` runs `scripts/sync-version.mjs`, which rewrites the `VERSION`
-constant in `src/index.mjs` to match and stages it - `test/repo-hygiene.test.mjs`
-fails the build if the two ever disagree, and `codex_bridge_status` reports that
-constant to anyone filing a bug.
-
-The workflow refuses to publish when the tag and `package.json` disagree, and
-checks the npm CLI is at least 11.5.1 before trying: trusted publishing needs
-it, and Node 22 still bundles npm 10.9.x, which is why the publish job pins
-Node 24 while the test matrix covers both.
+constants in the entrypoints to match and stages them. `test/repo-hygiene.test.mjs`
+fails the build if they disagree.
 
 ## Protocol questions
 
@@ -130,8 +101,8 @@ error.
 
 The github-packages.yml workflow validates an existing version tag, runs npm ci
 and npm test, checks the version and changelog, then publishes under the GitHub
-owner scope @buidangminh23 using GITHUB_TOKEN with packages:write. Only the runner
-checkout metadata changes; the @minhspark package on npmjs.com stays unchanged.
+owner scope @danyiimp using GITHUB_TOKEN with packages:write. The original
+project's package on npmjs.com stays unchanged.
 The repository URL associates the GitHub package with this repository.
 
 Push a version tag for future publications, or manually dispatch this workflow

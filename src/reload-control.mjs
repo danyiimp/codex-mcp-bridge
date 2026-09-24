@@ -22,7 +22,7 @@ export function clientReloadReason(client) {
 }
 
 export function createReloadControl({ entry, inspect = () => null, quiesce = () => {}, exportState = () => ({}), restore = () => {}, activate = () => {}, resume = activate, env = process.env, channel = process } = {}) {
-  if (!["index.mjs", "claude-bridge.mjs", "native-relay-companion.mjs"].includes(entry)) throw new Error("Invalid reload entry point");
+  if (!["index.mjs", "claude-bridge.mjs", "native-relay-companion.mjs", "cross-session-bridge.mjs"].includes(entry)) throw new Error("Invalid reload entry point");
   const enabled = env.CODEX_BRIDGE_WORKER === "1" && typeof channel.send === "function";
   let phase = enabled && env.CODEX_BRIDGE_STAGED === "1" ? "staged" : "active";
   let active = 0;

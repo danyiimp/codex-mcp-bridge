@@ -1,7 +1,7 @@
 {
-  "name": "@minhspark/codex-mcp-bridge",
-  "version": "1.18.0",
-  "description": "Two-way MCP bridge between Claude and Codex: prompts into a live Codex thread, messages into a running Claude Code session.",
+  "name": "@danyiimp/codex-mcp-bridge",
+  "version": "1.18.0-csb.1",
+  "description": "Claude and Codex MCP bridge with persistent session creation in both directions.",
   "keywords": [
     "mcp",
     "codex",
@@ -11,14 +11,14 @@
     "model-context-protocol"
   ],
   "license": "MIT",
-  "author": "Bui Dang Minh",
+  "author": "Danny Imp",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/buidangminh23/codex-mcp-bridge.git"
+    "url": "git+https://github.com/danyiimp/codex-mcp-bridge.git"
   },
-  "homepage": "https://github.com/buidangminh23/codex-mcp-bridge#readme",
+  "homepage": "https://github.com/danyiimp/codex-mcp-bridge#readme",
   "bugs": {
-    "url": "https://github.com/buidangminh23/codex-mcp-bridge/issues"
+    "url": "https://github.com/danyiimp/codex-mcp-bridge/issues"
   },
   "type": "module",
   "bin": {
@@ -28,7 +28,9 @@
     "claude-mcp-bridge-install": "scripts/install-codex-mcp.mjs",
     "codex-native-relay": "src/native-relay-launcher.mjs",
     "codex-native-relay-install": "scripts/install-native-relay.mjs",
-    "codex-npm-footer-install": "scripts/install-npm-footer.mjs"
+    "codex-npm-footer-install": "scripts/install-npm-footer.mjs",
+    "cross-session-bridge": "src/cross-session-bridge-launcher.mjs",
+    "cross-session-bridge-install": "scripts/install-cross-session-bridge.mjs"
   },
   "files": [
     "src",
@@ -67,5 +69,8 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
     "zod": "^3.25.76"
-  }
+  },
+  "contributors": [
+    "Bui Dang Minh"
+  ]
 }

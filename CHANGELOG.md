@@ -9,6 +9,19 @@ Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [SemVer](ht
 - Discover Claude Desktop sessions when accumulated task configuration exceeds 32 MiB. Retain only bounded identity fields and SHA-256 fingerprints while preserving account isolation, duplicate detection, and concurrent-change checks.
 - Report Desktop task verification failures separately from missing peer endpoints in session discovery and bridge status.
 
+## [1.18.0-csb.1] - 2026-09-24
+
+### Added
+
+- Create persistent Claude Code background sessions from a verified Codex Desktop task, with a chosen project, model, effort, permission mode, and Claude profile. Recover uncertain launches by request ID and read bounded conversation text without replaying a prompt.
+- A standalone combined MCP entrypoint and installer for Codex and Claude Code. The default Claude configuration works without CCS; an explicit `CLAUDE_CONFIG_DIR` or an optional CCS profile can be selected.
+- Create persistent full-access Codex tasks from Claude Code with pinned model and effort, durable receipts, and read-based result recovery.
+
+### Changed
+
+- Rebase the fork on upstream 1.18.0 and keep upstream's original features and MIT attribution.
+- Remove personally named test fixtures and turn off automatic reporting to the original project's telemetry endpoint in this fork.
+
 ## [1.18.0] - 2026-09-23
 
 ### Changed

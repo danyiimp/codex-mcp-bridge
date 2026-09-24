@@ -5,7 +5,7 @@ import path from "node:path";
 import { homeDir } from "./platform.mjs";
 
 const HASH = /^[a-f0-9]{64}$/;
-const FIELDS = new Set(["version", "key", "cwd", "promptHash", "state", "startedAt", "threadId", "projectId", "projectName", "name", "accountContext"]);
+const FIELDS = new Set(["version", "key", "cwd", "promptHash", "state", "startedAt", "threadId", "projectId", "projectName", "name", "accountContext", "claude"]);
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const normalizedName = (name) => name?.normalize("NFC").trim().replace(/\s+/g, " ");
 const canonicalCwd = (cwd) => process.platform === "win32" ? path.normalize(cwd).toLowerCase() : path.normalize(cwd);
@@ -19,6 +19,19 @@ function unsafeReceipt(key, cause) {
   return new Error(`Desktop task receipt ${key} is unsafe or corrupt. Do not resend creation; inspect the existing Desktop task and repair the receipt first.`, { cause });
 }
 
+// Optional metadata for native Claude background sessions. Never store prompts,
+// credentials, CLI output, or an arbitrary environment in a durable receipt.
+function validClaudeLaunch(value) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value).every(key => ["configDir", "name", "model", "effort", "permissionMode", "mcpMode"].includes(key))
+    && nonemptyString(value.configDir) && path.isAbsolute(value.configDir)
+    && nonemptyString(value.name)
+    && ["manual", "acceptEdits", "plan", "dontAsk", "bypassPermissions"].includes(value.permissionMode)
+    && ["inherit", "none"].includes(value.mcpMode)
+    && (value.model === undefined || ["fable", "opus", "sonnet", "haiku"].includes(value.model))
+    && (value.effort === undefined || ["low", "medium", "high", "xhigh", "max"].includes(value.effort));
+}
+
 function validateReceipt(key, receipt) {
   const valid = receipt && typeof receipt === "object" && !Array.isArray(receipt)
     && Object.keys(receipt).every((field) => FIELDS.has(field))
@@ -28,6 +41,7 @@ function validateReceipt(key, receipt) {
     && Number.isSafeInteger(receipt.startedAt) && receipt.startedAt >= 0
     && (receipt.accountContext === undefined || receipt.accountContext && typeof receipt.accountContext === "object" && !Array.isArray(receipt.accountContext)
       && Object.keys(receipt.accountContext).length === 2 && ["claude", "codex"].every((provider) => typeof receipt.accountContext[provider] === "string" && HASH.test(receipt.accountContext[provider])))
+    && (receipt.claude === undefined || validClaudeLaunch(receipt.claude))
     && ["threadId", "projectId", "projectName", "name"].every((field) => receipt[field] === undefined || nonemptyString(receipt[field]))
     && (receipt.state !== "known" || nonemptyString(receipt.threadId));
   if (!valid) throw unsafeReceipt(key);

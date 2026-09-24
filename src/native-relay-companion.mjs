@@ -31,10 +31,11 @@ import { createRuntimeState } from "./runtime-state.mjs";
 import { hardenedBridgeEnabled } from "./hardened-root-policy.mjs";
 import { protectCurrentUserPipe } from "./windows-pipe-acl.mjs";
 import { createHardenedRootPolicy } from "./hardened-root-policy.mjs";
+import { compactThreadRead } from "./cross-session-tasks.mjs";
 
 exitForVersionRequest(import.meta.url);
 
-const VERSION = "1.18.0";
+const VERSION = "1.18.0-csb.1";
 const log = (msg) => process.stderr.write(`[native-relay] ${msg}\n`);
 
 function errorResponse(code, message, sent) {
@@ -333,7 +334,7 @@ async function handleDesktopRequest(payload, { dispatchDesktop, resolveExecutor,
       v: boundRequest(payload) ? ACCOUNT_RELAY_PROTOCOL_VERSION : RELAY_PROTOCOL_VERSION,
       operation: payload.operation,
       executorThreadId,
-      result: checked?.result ?? decoded,
+      result: payload.operation === "read_thread" ? compactThreadRead(checked?.result ?? decoded) : checked?.result ?? decoded,
     };
   } catch (err) {
     return errorResponse(errorCode(err), err?.message ?? String(err), err?.sent === false && err?.reachedCompanion !== true ? false : undefined);

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isDesktopRootThreadSource } from "./desktop-thread-source.mjs";
 
 const METADATA_KEY = "x-codex-turn-metadata";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -127,7 +128,7 @@ export function readCodexSenderContext(meta, { env = process.env, maxRolloutByte
     review: { autoReview: reviewFlag(metadata, "auto_review_enabled"), nodeReplReview: reviewFlag(metadata, "node_repl_auto_review_required") } };
   try {
     if (!Number.isSafeInteger(maxRolloutBytes) || maxRolloutBytes < 1) throw new Error("The sender rollout read limit is invalid");
-    if (metadata.thread_source !== "user") throw new Error("This MCP call is not from a user-owned Codex task");
+    if (!isDesktopRootThreadSource(metadata.thread_source)) throw new Error("This MCP call is not from a supported root Desktop task (user or agent_created_thread)");
     const configuredHome = env.CODEX_HOME || path.join(env.HOME || env.USERPROFILE || os.homedir(), ".codex");
     if (!path.isAbsolute(configuredHome)) throw new Error("The configured Codex home must be absolute");
     const sessions = path.join(configuredHome, "sessions");
