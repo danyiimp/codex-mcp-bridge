@@ -5,9 +5,9 @@
 
 Send prompts and replies between **Claude and Codex**, keeping each conversation in its own app. Supports Windows, macOS, and Linux; native Desktop integration supports Windows and macOS.
 
-This is Danny Imp's fork of [the original codex-mcp-bridge](https://github.com/buidangminh23/codex-mcp-bridge). It retains the upstream bridge and adds persistent Claude Code session creation from Codex, plus a combined MCP server you can install without CCS. The original authors and MIT license are credited in [LICENSE](LICENSE).
+Adds persistent session creation in both directions, project/model/effort and permission controls, and recovery tools for uncertain requests. A combined MCP server registers directly with Codex and Claude Code.
 
-**Install this fork from GitHub (no CCS or package-registry login required):**
+**Install from GitHub (no CCS or package-registry login required):**
 
 ```bash
 npm install -g github:danyiimp/codex-mcp-bridge#v1.18.0-csb.1
@@ -30,7 +30,7 @@ Starring the repository or downloading/installing a package does not subscribe y
 ### GitHub Packages
 
 The repository-linked copy is [@danyiimp/codex-mcp-bridge](https://github.com/danyiimp/codex-mcp-bridge/packages)
-on npm.pkg.github.com. The npmjs.com package `@minhspark/codex-mcp-bridge` belongs to the original project; install this fork from GitHub using the command above when registry authentication is unavailable.
+on npm.pkg.github.com. The npmjs.com package `@minhspark/codex-mcp-bridge` belongs to the original project; install this package from GitHub using the command above when registry authentication is unavailable.
 GitHub's npm registry requires authentication with a classic token with read:packages,
 even for public packages. Authenticate locally and never commit a token:
 
@@ -219,7 +219,7 @@ The registered supervisor should report auto-reload enabled. Next, list the inte
 
 ## Standalone Cross Session Bridge
 
-The new combined server is a separate MCP entrypoint in this package. It works with a regular Claude Code installation and its default `~/.claude` configuration; CCS is optional. The upstream entrypoints and the platform setup above remain available. On macOS and Windows, install the native relay using the platform instructions, ensure the `claude` CLI is installed and signed in, then register the combined server for both clients:
+The combined server is a separate MCP entrypoint in this package. A regular Claude Code installation with its default `~/.claude` configuration is enough; CCS is not required. If CCS is installed, the bridge discovers its profiles and lets you select one explicitly. The upstream entrypoints and the platform setup above remain available. On macOS and Windows, install the native relay using the platform instructions, ensure the `claude` CLI is installed and signed in, then register the combined server for both clients:
 
 ```bash
 cross-session-bridge-install --both
@@ -227,7 +227,7 @@ cross-session-bridge-install --both
 
 In PowerShell use `cross-session-bridge-install.cmd --both`. `--codex` or `--claude` registers just one side; add `--remove` to undo that registration. The installer discovers the real Codex and Claude executables and records their absolute paths, so a restricted MCP `PATH` does not change which clients run. You can set `CODEX_EXE` and `CLAUDE_BIN` to explicit executable paths before installation. Reconnect the `cross-session-bridge` MCP server in existing Codex and Claude Code tasks, then call `bridge_status` to check `apiVersion`, capabilities and `autoReload`.
 
-From a Codex Desktop task, call `create_claude_session` with an absolute project `cwd`, a `message`, and a stable `request_id`. It starts a persistent native Claude Code background session and returns its `sessionId`. Choose `model` (`fable`, `opus`, `sonnet`, `haiku`), `effort` (`low`, `medium`, `high`, `xhigh`, `max`), and `permission_mode` (`manual`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions`) when needed. The default permission mode is `manual`; explicit `bypassPermissions` requires a verified full-access Codex caller. Claude must already trust the project. Use `profile: "default"` for a normal installation, `"CLAUDE_CONFIG_DIR"` when that environment variable selects another Claude configuration, or an optional installed CCS profile. `mcp_mode: "none"` skips the new session's external MCP servers.
+From a Codex Desktop task, call `create_claude_session` with an absolute project `cwd`, a `message`, and a stable `request_id`. It starts a persistent native Claude Code background session and returns its `sessionId`. Choose `model` (`fable`, `opus`, `sonnet`, `haiku`), `effort` (`low`, `medium`, `high`, `xhigh`, `max`), and `permission_mode` (`manual`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions`) when needed. The default permission mode is `manual`; explicit `bypassPermissions` requires a verified full-access Codex caller. Claude must already trust the project. Use `profile: "default"` for a normal installation, `"CLAUDE_CONFIG_DIR"` when that environment variable selects another Claude configuration, or `"CCS:<profile-name>"` for a discovered CCS profile. `mcp_mode: "none"` skips the new session's external MCP servers.
 
 Read a new session with `read_claude_session(target=sessionId, cwd=..., profile=...)`; continue its live conversation with `send_to_claude_session` using the exact ID. `get_claude_request(cwd=..., request_id=...)` recovers an uncertain creation without starting another session. The request ID is scoped to the calling Codex task and canonical project directory. Reading returns bounded text and native status separately; acceptance is not task completion. Attach interactively with the returned command if the session needs a user decision.
 
@@ -347,6 +347,6 @@ npm ci
 npm test
 ```
 
-On Windows, use `node --test --test-concurrency=2` (also avoids npm versions that reject forwarded flags). CI tests Node 22 and 24 on Linux, macOS, and Windows. Tests use isolated fixtures and do not spend model quota. The fork does not start upstream telemetry reporting.
+On Windows, use `node --test --test-concurrency=2` (also avoids npm versions that reject forwarded flags). CI tests Node 22 and 24 on Linux, macOS, and Windows. Tests use isolated fixtures and do not spend model quota. Upstream telemetry reporting is disabled.
 
 [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [MIT license](LICENSE)
