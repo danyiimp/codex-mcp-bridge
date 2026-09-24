@@ -44,12 +44,14 @@ jobs:
           owner="${GITHUB_REPOSITORY_OWNER,,}"
           name="${GITHUB_REPOSITORY#*/}"
           version=$(node -p "require('./package.json').version")
+          dist_tag=latest
+          if [[ "$version" == *-* ]]; then dist_tag=csb; fi
           npm pkg set "name=@$owner/$name" "repository.url=git+https://github.com/$GITHUB_REPOSITORY.git"
           npm pkg set "publishConfig.registry=https://npm.pkg.github.com"
           if npm view "@$owner/$name@$version" version --registry=https://npm.pkg.github.com > /dev/null 2>&1; then
             echo "@$owner/$name@$version already published"
           else
-            npm publish --ignore-scripts --registry=https://npm.pkg.github.com
+            npm publish --tag "$dist_tag" --ignore-scripts --registry=https://npm.pkg.github.com
           fi
           test "$(npm view "@$owner/$name@$version" version --registry=https://npm.pkg.github.com)" = "$version"
           npm pack "@$owner/$name@$version" --ignore-scripts --registry=https://npm.pkg.github.com --pack-destination "$RUNNER_TEMP"
