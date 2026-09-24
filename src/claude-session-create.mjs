@@ -37,6 +37,40 @@ export function resolveClaudeProfile(profile = 'default', discovery = discoverCl
   return canonicalDirectory(matches[0].path);
 }
 
+export function defaultClaudeProfile(env = process.env) {
+  return env.CROSS_SESSION_BRIDGE_CLAUDE_PROFILE || 'default';
+}
+
+export function ccsProfileName(profile) {
+  return ['default', 'CLAUDE_CONFIG_DIR', 'CCS_HOME'].includes(profile) ? null
+    : profile.startsWith('CCS:') ? profile.slice(4) : profile;
+}
+
+export function ccsExecutable(env = process.env) {
+  const explicit = env.CCS_BIN;
+  if (explicit !== undefined) {
+    let valid = false;
+    try { valid = typeof explicit === 'string' && path.isAbsolute(explicit) && fs.statSync(explicit).isFile(); } catch {}
+    if (!valid) throw new Error('CCS_BIN must point to an existing CCS executable.');
+    return explicit;
+  }
+  const name = process.platform === 'win32' ? 'ccs.cmd' : 'ccs';
+  for (const directory of (env.PATH ?? '').split(path.delimiter).filter(Boolean)) {
+    const candidate = path.join(directory, name);
+    try { if (fs.statSync(candidate).isFile()) return candidate; } catch {}
+  }
+  throw new Error('CCS executable not found. Install CCS or set CCS_BIN to its absolute executable path.');
+}
+
+export function ccsCommand(env = process.env, platform = process.platform) {
+  const executable = ccsExecutable(env);
+  if (platform !== 'win32' || !/\.cmd$/i.test(executable)) return { executable, prefix: [] };
+  // npm's Windows .cmd shim cannot be passed to execFile without a shell.
+  const script = path.join(path.dirname(executable), 'node_modules', '@kaitranntt', 'ccs', 'dist', 'ccs.js');
+  try { if (fs.statSync(script).isFile()) return { executable: process.execPath, prefix: [script] }; } catch {}
+  throw new Error('CCS Windows shim has no adjacent package CLI. Set CCS_BIN to the ccs.js entry point.');
+}
+
 export function claudeLaunchArgs(spec) {
   const args = ['--background', '--name', spec.name, '--permission-mode', spec.permissionMode];
   if (spec.permissionMode === 'bypassPermissions') args.push('--dangerously-skip-permissions');
@@ -62,8 +96,13 @@ export function claudeEnvironment(configDir, env = process.env) {
 
 // execFile uses no shell. End stdin explicitly: otherwise CLI pipe detection can
 // append the caller's source script or unrelated input to the requested prompt.
-export async function runClaude(args, { cwd, configDir, timeout = 20000 } = {}) {
-  const pending = exec(claudeExecutable(), args, { cwd, env: claudeEnvironment(configDir), timeout, maxBuffer: 2 * 1024 * 1024, encoding: 'utf8' });
+export async function runClaude(args, { cwd, configDir, ccsProfile = null, timeout = 20000 } = {}) {
+  const env = claudeEnvironment(configDir);
+  if (ccsProfile) env.CCS_DIR = path.dirname(path.dirname(configDir));
+  const command = ccsProfile ? ccsCommand() : { executable: claudeExecutable(), prefix: [] };
+  const { executable } = command;
+  const launchArgs = ccsProfile ? [...command.prefix, ccsProfile, ...args] : args;
+  const pending = exec(executable, launchArgs, { cwd, env, timeout, maxBuffer: 2 * 1024 * 1024, encoding: 'utf8' });
   pending.child.stdin.end();
   return pending;
 }
@@ -95,7 +134,8 @@ export function createClaudeSessions({ getSource, assertCurrent, receipts = new 
     return { requestState: record.state, sessionId: record.threadId ?? null, cwd: record.cwd,
       profileDirectory: record.claude.configDir, name: record.claude.name, model: record.claude.model ?? 'native default', effort: record.claude.effort ?? 'native default', permissionMode: record.claude.permissionMode,
       reused, nativeStatus: native?.status ?? null, nativeState: native?.state ?? null, waitingFor: native?.waitingFor ?? null,
-      attach: record.threadId ? ['claude', 'attach', record.threadId.slice(0, 8)] : null,
+      profile: record.claude.profile ?? 'default',
+      attach: record.threadId ? (ccsProfileName(record.claude.profile ?? 'default') ? ['ccs', ccsProfileName(record.claude.profile), 'attach', record.threadId.slice(0, 8)] : ['claude', 'attach', record.threadId.slice(0, 8)]) : null,
       attachEnvironment: { CLAUDE_CONFIG_DIR: claudeEnvironment(record.claude.configDir, {}).CLAUDE_CONFIG_DIR ?? null },
       note: 'Creation is workspace-scoped and is not task completion. Read the same session; never repeat an unknown launch with a new request_id. Native workspace trust and permission prompts require user action through claude attach.' };
   }
@@ -133,7 +173,7 @@ export function createClaudeSessions({ getSource, assertCurrent, receipts = new 
     return recovered;
   }
   return {
-    async create({ cwd, title, message, request_id, model, effort, permission_mode = 'manual', profile = 'default', mcp_mode = 'inherit' } = {}) {
+    async create({ cwd, title, message, request_id, model, effort, permission_mode = 'manual', profile = defaultClaudeProfile(), mcp_mode = 'inherit' } = {}) {
       const source = await sourceNow();
       cwd = canonicalDirectory(cwd ?? source.cwd);
       if (typeof message !== 'string' || !message.trim() || message.length > 100000 || message.includes('\0')) throw new Error('A nonempty message of at most 100000 characters is required.');
@@ -158,14 +198,14 @@ export function createClaudeSessions({ getSource, assertCurrent, receipts = new 
         await guard(source);
         const label = (title ?? message.split('\n').find(line => line.trim())).replace(/[\x00-\x20\x7f]+/g, ' ').trim();
         const name = `${label.slice(0, 120)} [bridge ${id.key.slice(0, 16)}]`;
-        const launch = { configDir, name, permissionMode: permission_mode, mcpMode: mcp_mode, ...(model ? { model } : {}), ...(effort ? { effort } : {}) };
+        const launch = { configDir, profile, name, permissionMode: permission_mode, mcpMode: mcp_mode, ...(model ? { model } : {}), ...(effort ? { effort } : {}) };
         let record = { version: 1, key: id.key, cwd, promptHash: id.promptHash, state: 'pending', startedAt: Date.now(), name: id.name, claude: launch };
         await receipts.write(id.key, record);
         await guard(source);
         let launchError = null;
         try {
           // Do not pass --session-id: native --background allocates its own ID.
-          await run(claudeLaunchArgs({ ...launch, message }), { cwd, configDir });
+          await run(claudeLaunchArgs({ ...launch, message }), { cwd, configDir, ...(ccsProfileName(profile) ? { ccsProfile: ccsProfileName(profile) } : {}) });
         } catch (error) {
           const output = String(error.stderr ?? '');
           launchError = /Workspace not trusted/.test(output) ? 'Workspace is not trusted in this Claude profile. Open claude in that directory and approve trust, then use a new request_id; this request is never relaunched.'

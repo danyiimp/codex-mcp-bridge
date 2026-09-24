@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { exitForVersionRequest } from "../src/cli-version.mjs";
-import { claudeExecutable } from "../src/claude-session-create.mjs";
+import { ccsExecutable, claudeExecutable } from "../src/claude-session-create.mjs";
 import { stdioMcpRegistration } from "../src/codex-mcp-registration.mjs";
 import { resolveCodexBin, spawnEnv } from "../src/platform.mjs";
 import { createReleaseSnapshot, snapshotRoot } from "../src/release-snapshot.mjs";
@@ -80,9 +80,19 @@ if (remove) {
   process.exit(0);
 }
 
+let ccsBin;
+try { ccsBin = ccsExecutable(); }
+catch (error) { if (!/CCS executable not found/.test(error.message)) throw error; }
+// GUI-launched MCP workers do not inherit the terminal's proxy variables.
+// Persist the installer's routing so CCS profiles get the same network path.
+const proxyEnv = Object.fromEntries(['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy']
+  .filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]));
 const registration = installCodex ? stdioMcpRegistration({
   name, existing: codexExisting, node: nodeBin, entry, entryArgs: [worker],
-  envOverrides: { CODEX_BIN: codexBin, CLAUDE_BIN: claudeBin },
+  envOverrides: { CODEX_BIN: codexBin, CLAUDE_BIN: claudeBin,
+    ...(ccsBin ? { CCS_BIN: ccsBin } : {}),
+    ...(process.env.CROSS_SESSION_BRIDGE_CLAUDE_PROFILE ? { CROSS_SESSION_BRIDGE_CLAUDE_PROFILE: process.env.CROSS_SESSION_BRIDGE_CLAUDE_PROFILE } : {}),
+    ...proxyEnv },
 }) : null;
 createReleaseSnapshot(root, { cache: snapshotRoot(process.env) });
 

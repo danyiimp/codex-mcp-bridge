@@ -23,8 +23,9 @@ function unsafeReceipt(key, cause) {
 // credentials, CLI output, or an arbitrary environment in a durable receipt.
 function validClaudeLaunch(value) {
   return value && typeof value === "object" && !Array.isArray(value)
-    && Object.keys(value).every(key => ["configDir", "name", "model", "effort", "permissionMode", "mcpMode"].includes(key))
+    && Object.keys(value).every(key => ["configDir", "profile", "name", "model", "effort", "permissionMode", "mcpMode"].includes(key))
     && nonemptyString(value.configDir) && path.isAbsolute(value.configDir)
+    && (value.profile === undefined || nonemptyString(value.profile) && value.profile.length <= 100)
     && nonemptyString(value.name)
     && ["manual", "acceptEdits", "plan", "dontAsk", "bypassPermissions"].includes(value.permissionMode)
     && ["inherit", "none"].includes(value.mcpMode)

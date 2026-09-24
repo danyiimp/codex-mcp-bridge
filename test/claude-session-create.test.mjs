@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
-import { canonicalDirectory, claudeEnvironment, claudeLaunchArgs, createClaudeSessions, resolveClaudeProfile } from '../src/claude-session-create.mjs';
+import { canonicalDirectory, ccsCommand, ccsExecutable, ccsProfileName, claudeEnvironment, claudeLaunchArgs, createClaudeSessions, defaultClaudeProfile, resolveClaudeProfile, runClaude } from '../src/claude-session-create.mjs';
 import { DesktopTaskReceipts } from '../src/desktop-task-receipts.mjs';
 
 const SOURCE = '11111111-1111-4111-8111-111111111111';
@@ -75,6 +75,21 @@ function fixture(t) {
 }
 
 describe('native Claude session creation', () => {
+  it('uses the configured CCS profile when profile is omitted', async t => {
+    const f = fixture(t);
+    f.profiles.set('CCS:work', f.otherConfig);
+    const previous = process.env.CROSS_SESSION_BRIDGE_CLAUDE_PROFILE;
+    process.env.CROSS_SESSION_BRIDGE_CLAUDE_PROFILE = 'CCS:work';
+    t.after(() => {
+      if (previous === undefined) delete process.env.CROSS_SESSION_BRIDGE_CLAUDE_PROFILE;
+      else process.env.CROSS_SESSION_BRIDGE_CLAUDE_PROFILE = previous;
+    });
+    const result = await f.tasks.create({ request_id: 'configured-default', message: 'Run once.' });
+    assert.equal(result.profile, 'CCS:work');
+    assert.equal(result.profileDirectory, f.otherConfig);
+    assert.equal(f.launches[0].options.ccsProfile, 'work');
+  });
+
   it('persists pending before launch and uses the requested profile, cwd, model and effort', async t => {
     const f = fixture(t);
     const args = { request_id: 'configured', title: 'Visible title', message: 'Private request body that is not a title.', profile: 'other', model: 'sonnet', effort: 'high', permission_mode: 'bypassPermissions', mcp_mode: 'none' };
@@ -82,7 +97,7 @@ describe('native Claude session creation', () => {
       const saved = await f.read(args.request_id);
       assert.equal(saved.state, 'pending');
       assert.equal(saved.threadId, undefined, 'Claude allocates the native session ID');
-      assert.deepEqual(options, { cwd: f.cwd, configDir: f.otherConfig });
+      assert.deepEqual(options, { cwd: f.cwd, configDir: f.otherConfig, ccsProfile: 'other' });
       assert.equal(cli.at(-1), args.message);
       assert.equal(cli.at(-2), '--');
       assert.ok(cli.includes('--dangerously-skip-permissions'));
@@ -97,7 +112,7 @@ describe('native Claude session creation', () => {
     assert.equal(result.sessionId, SESSION);
     assert.equal(result.reused, false);
     assert.equal(result.permissionMode, 'bypassPermissions');
-    assert.deepEqual(result.attach, ['claude', 'attach', SESSION.slice(0, 8)]);
+    assert.deepEqual(result.attach, ['ccs', 'other', 'attach', SESSION.slice(0, 8)]);
     assert.deepEqual(result.attachEnvironment, { CLAUDE_CONFIG_DIR: f.otherConfig });
     assert.deepEqual(f.writes.map(record => record.state), ['pending', 'unknown', 'known']);
     assert.ok(f.sourceChecks >= 3, 'caller is checked before preparation, before receipt, and before launch');
@@ -410,5 +425,40 @@ describe('Claude launch argument and profile boundaries', () => {
     assert.throws(() => resolveClaudeProfile('wor', discovery), /missing or ambiguous/);
     assert.throws(() => resolveClaudeProfile('default', { directories: [...discovery.directories, { path: f.otherConfig, sources: ['default'] }] }), /missing or ambiguous/);
     assert.equal(canonicalDirectory(alias), f.otherConfig);
+  });
+
+  it('uses a configured profile only when the caller omits one', () => {
+    assert.equal(defaultClaudeProfile({}), 'default');
+    assert.equal(defaultClaudeProfile({ CROSS_SESSION_BRIDGE_CLAUDE_PROFILE: 'CCS:work' }), 'CCS:work');
+    assert.equal(ccsProfileName('CCS:work'), 'work');
+    assert.equal(ccsProfileName('work'), 'work');
+    assert.equal(ccsProfileName('default'), null);
+    assert.equal(ccsProfileName('CLAUDE_CONFIG_DIR'), null);
+  });
+
+  it('runs CCS profiles through the CCS command with the selected instance root', async t => {
+    const f = fixture(t);
+    const bin = path.join(f.directory, 'ccs-cli');
+    fs.writeFileSync(bin, `#!${process.execPath}\nprocess.stdout.write(JSON.stringify({ args: process.argv.slice(2), config: process.env.CLAUDE_CONFIG_DIR, root: process.env.CCS_DIR, proxy: process.env.HTTPS_PROXY }));\n`, { mode: 0o755 });
+    const previousBin = process.env.CCS_BIN;
+    const previousProxy = process.env.HTTPS_PROXY;
+    process.env.CCS_BIN = bin;
+    process.env.HTTPS_PROXY = 'http://127.0.0.1:10808';
+    t.after(() => {
+      if (previousBin === undefined) delete process.env.CCS_BIN; else process.env.CCS_BIN = previousBin;
+      if (previousProxy === undefined) delete process.env.HTTPS_PROXY; else process.env.HTTPS_PROXY = previousProxy;
+    });
+    const selected = path.join(f.directory, 'ccs', 'instances', 'work');
+    fs.mkdirSync(selected, { recursive: true });
+    const { stdout } = await runClaude(['--background', '--', 'message'], { cwd: f.cwd, configDir: selected, ccsProfile: 'work' });
+    assert.deepEqual(JSON.parse(stdout), { args: ['work', '--background', '--', 'message'], config: selected, root: path.join(f.directory, 'ccs'), proxy: 'http://127.0.0.1:10808' });
+    assert.equal(ccsExecutable({ CCS_BIN: bin }), bin);
+    assert.throws(() => ccsExecutable({ CCS_BIN: path.join(f.directory, 'missing') }), /CCS_BIN/);
+    const shim = path.join(f.directory, 'ccs.cmd');
+    const script = path.join(f.directory, 'node_modules', '@kaitranntt', 'ccs', 'dist', 'ccs.js');
+    fs.writeFileSync(shim, 'stub');
+    fs.mkdirSync(path.dirname(script), { recursive: true });
+    fs.writeFileSync(script, 'stub');
+    assert.deepEqual(ccsCommand({ CCS_BIN: shim }, 'win32'), { executable: process.execPath, prefix: [script] });
   });
 });

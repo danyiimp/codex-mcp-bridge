@@ -32,7 +32,22 @@ function readSnapshot(configDir, slug, sessionId) {
   // The caller verifies the account owning this root. Canonicalize trusted parent
   // aliases (such as macOS /tmp), while refusing symlinks below the selected root.
   const root = fs.realpathSync.native(configDir);
-  const directories = [root, path.join(root, "projects"), path.join(root, "projects", slug)];
+  const projectsLink = path.join(root, "projects");
+  const projectsLinkInfo = fs.lstatSync(projectsLink);
+  let projectsRoot = projectsLink;
+  if (projectsLinkInfo.isSymbolicLink()) {
+    // CCS may share project transcripts across profiles in one context group.
+    // Accept only that managed location, never an arbitrary link outside CCS.
+    const ccsRoot = path.dirname(path.dirname(root));
+    const shared = path.join(ccsRoot, "shared", "context-groups");
+    projectsRoot = fs.realpathSync.native(projectsLink);
+    const relative = path.relative(shared, projectsRoot);
+    if (path.basename(path.dirname(root)) !== "instances" || relative.split(path.sep).length !== 2
+        || relative.startsWith(".." + path.sep) || path.isAbsolute(relative) || path.basename(projectsRoot) !== "projects") {
+      throw failure("UNSAFE", "Claude transcript projects link is outside the selected CCS context group.");
+    }
+  }
+  const directories = [root, projectsRoot, path.join(projectsRoot, slug)];
   const versions = [rootInfo, ...directories.slice(1).map(directoryInfo)];
   const file = path.join(directories[2], `${sessionId}.jsonl`);
   const info = fs.lstatSync(file);
@@ -54,6 +69,7 @@ function readSnapshot(configDir, slug, sessionId) {
       offset += count;
     }
     if (!sameVersion(opened, fs.fstatSync(descriptor)) || !sameVersion(opened, fs.lstatSync(file))
+        || !sameVersion(projectsLinkInfo, fs.lstatSync(projectsLink)) || fs.realpathSync.native(projectsLink) !== projectsRoot
         || directories.some((directory, index) => {
           const current = directoryInfo(directory);
           return current.dev !== versions[index].dev || current.ino !== versions[index].ino;

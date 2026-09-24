@@ -53,6 +53,19 @@ it("registers the combined MCP entry in Codex and Claude Code without a CCS prof
     assert.ok(call.argv.includes(`CLAUDE_BIN=${claude}`));
   }
   assert.match(output, /Reconnect cross-session-bridge/);
+
+  const ccs = path.join(home, 'ccs');
+  fakeExecutable(ccs, 'ccs');
+  execFileSync(process.execPath, [installedScript, '--codex'], {
+    cwd: packageRoot, encoding: 'utf8', env: { ...process.env, HOME: home, CODEX_HOME: path.join(home, '.codex'),
+      CODEX_EXE: codex, CLAUDE_BIN: claude, CCS_BIN: ccs, BRIDGE_TEST_LOG: log,
+      CROSS_SESSION_BRIDGE_CLAUDE_PROFILE: 'CCS:work', HTTP_PROXY: 'http://127.0.0.1:10808', HTTPS_PROXY: 'http://127.0.0.1:10808' },
+  });
+  const withCcs = fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse).filter(call => call.role === 'codex' && call.argv.slice(0, 3).join(' ') === 'mcp add cross-session-bridge').at(-1);
+  assert.ok(withCcs.argv.includes(`CCS_BIN=${ccs}`));
+  assert.ok(withCcs.argv.includes('CROSS_SESSION_BRIDGE_CLAUDE_PROFILE=CCS:work'));
+  assert.ok(withCcs.argv.includes('HTTP_PROXY=http://127.0.0.1:10808'));
+  assert.ok(withCcs.argv.includes('HTTPS_PROXY=http://127.0.0.1:10808'));
 });
 
 it("exposes a version without inspecting or changing client configuration", () => {

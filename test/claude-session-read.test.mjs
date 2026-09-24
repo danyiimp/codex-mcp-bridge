@@ -36,6 +36,24 @@ function rejects(callback, code) {
 }
 
 describe("bounded native Claude session reads", () => {
+  it("reads a CCS context group's managed projects link without allowing an external target", () => {
+    const root = path.join(sandbox, `ccs-${++serial}`);
+    const configDir = path.join(root, 'instances', 'work');
+    const shared = path.join(root, 'shared', 'context-groups', 'default', 'projects');
+    const cwd = path.join(sandbox, 'ccs-project');
+    const slug = cwd.replace(/[^a-zA-Z0-9]/g, '-');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.mkdirSync(path.join(shared, slug), { recursive: true });
+    fs.symlinkSync(shared, path.join(configDir, 'projects'), 'dir');
+    fs.writeFileSync(path.join(shared, slug, `${target}.jsonl`), JSON.stringify({ type: 'assistant', sessionId: target, cwd, timestamp: '2026-09-24T13:52:19.062Z', message: { role: 'assistant', content: 'through CCS' } }) + '\n');
+    assert.equal(readClaudeSession({ target, cwd, configDir }).messages[0].text, 'through CCS');
+    fs.unlinkSync(path.join(configDir, 'projects'));
+    const external = path.join(sandbox, `external-${serial}`);
+    fs.mkdirSync(path.join(external, slug), { recursive: true });
+    fs.symlinkSync(external, path.join(configDir, 'projects'), 'dir');
+    rejects(() => readClaudeSession({ target, cwd, configDir }), 'UNSAFE');
+  });
+
   it("reads the escaped cwd slug, preserving recent user turns and newest available model", () => {
     const { args, row, write } = fixture();
     write([
