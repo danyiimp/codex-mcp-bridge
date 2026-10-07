@@ -708,11 +708,12 @@ export class PeerEndpoint {
    * Renaming to the bound thread is what lets a human tell them apart in
    * Claude's agent list.
    */
-  rename(name) {
-    if (!name || name === this.name) return this.name;
+  rename(name, codex = null) {
+    if (!name || (name === this.name && !codex)) return this.name;
     this.name = name;
     if (this.started && this.registry) {
       this.registry.name = name;
+      if (codex) this.registry.codex = codex;
       fs.writeFileSync(this.registryPath, JSON.stringify(this.registry), { mode: 0o600 });
       this.log(`peer renamed to "${name}"`);
     }

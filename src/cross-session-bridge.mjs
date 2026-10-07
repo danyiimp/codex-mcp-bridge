@@ -153,7 +153,7 @@ async function bind(source) {
   boundSource = { ...source, title: response.thread.title };
   peer.cwd = source.cwd;
   await peer.start();
-  peer.rename(`oai ${response.thread.title} ${source.threadId.slice(0, 8)}`);
+  peer.rename(`oai ${response.thread.title} ${source.threadId.slice(0, 8)}`, { threadId: source.threadId });
 }
 
 const tasks = createCrossSessionTasks({ relay, getSource: claudeSource, assertCurrent: () => runtime.assertCurrent() });
