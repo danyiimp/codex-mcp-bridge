@@ -84,12 +84,12 @@ describe('full-access runner', () => {
   });
 
   it('retries a failed initialize on a fresh app-server (nothing exists yet) and creates exactly one thread', async (t) => {
-    const f = fixture(t, { FAKE_INIT_FAILS: '2', CODEX_BRIDGE_INIT_PAUSE_MS: '20' });
+    const f = fixture(t, { FAKE_INIT_FAILS: '3', CODEX_BRIDGE_INIT_PAUSE_MS: '20' });
     const response = await launchFullAccessTurn({ cwd: f.directory, prompt: 'Probe' }, { timeoutMs: 10000 });
     assert.equal(response.result.threadId, 'thread-1');
     assert.equal(f.messages().filter((message) => message.method === 'thread/start').length, 1, 'one thread, no duplicate');
-    assert.equal(Number(fs.readFileSync(`${process.env.FAKE_APP_SERVER_LOG}.count`, 'utf8')), 3, 'two failed starts and the third served');
-    await until(() => fs.readFileSync(runnerLogPath(), 'utf8').includes('retry 2/2'));
+    assert.equal(Number(fs.readFileSync(`${process.env.FAKE_APP_SERVER_LOG}.count`, 'utf8')), 4, 'three failed starts and the fourth served');
+    await until(() => fs.readFileSync(runnerLogPath(), 'utf8').includes('retry 3/3'));
   });
 
   it('gives up after the retries and names the app-server stderr in the error', async (t) => {

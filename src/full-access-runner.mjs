@@ -112,9 +112,9 @@ function appServer({ cwd, codexBin, log }) {
 }
 
 /** Child side: one thread, one full-access turn, then release. */
-export const INIT_RETRIES = 2;
+export const INIT_RETRIES = 3;
 
-export async function runFullAccessTurn(job, { report, log, codexBin = resolveCodexBin(), lifetimeMs = TURN_LIFETIME_MS, initPauseMs = 3000 }) {
+export async function runFullAccessTurn(job, { report, log, codexBin = resolveCodexBin(), lifetimeMs = TURN_LIFETIME_MS, initPauseMs = 2000 }) {
   let server;
   const finished = new Map();
   let onFinished = () => {};
@@ -130,7 +130,7 @@ export async function runFullAccessTurn(job, { report, log, codexBin = resolveCo
     return opened;
   };
   try {
-    // A cold app-server start under load exited with code 1 four times in a minute (07.10 16:09Z) and then recovered: before any thread exists a failed
+    // A cold app-server start under load exits with code 1 («failed to initialize sqlite state runtime», seen once the stderr tail was kept, 07.10 16:09Z and 16:25Z): before any thread exists a failed
     // initialize is retried on a fresh process (nothing was created, so no duplicate); a later failure is never retried.
     for (let attempt = 0; ; attempt += 1) {
       server = open();
@@ -224,7 +224,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === RUNNER) {
   try {
     let text = "";
     for await (const chunk of process.stdin) text += chunk;
-    await runFullAccessTurn(JSON.parse(text), { report, log, initPauseMs: Number(process.env.CODEX_BRIDGE_INIT_PAUSE_MS ?? 3000) });
+    await runFullAccessTurn(JSON.parse(text), { report, log, initPauseMs: Number(process.env.CODEX_BRIDGE_INIT_PAUSE_MS ?? 2000) });
   } catch (error) {
     report({ event: "error", message: error.message });
     process.exitCode = 1;
