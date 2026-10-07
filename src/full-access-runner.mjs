@@ -44,7 +44,10 @@ function childEnv() {
 }
 
 function appServer({ cwd, codexBin, log }) {
-  const child = spawn(codexBin, ["app-server"], { cwd, env: childEnv(), stdio: ["pipe", "pipe", "ignore"] });
+  const child = spawn(codexBin, ["app-server"], { cwd, env: childEnv(), stdio: ["pipe", "pipe", "pipe"] });
+  let stderrTail = "";
+  child.stderr.on("data", (chunk) => { stderrTail = `${stderrTail}${chunk}`.slice(-2000); });
+  const exitText = (signal, code) => `app-server exited (${signal ?? code})${stderrTail.trim() ? `: ${stderrTail.trim().split("\n").slice(-3).join(" | ").slice(-300)}` : ""}`;
   const pending = new Map();
   const listeners = new Set();
   let nextId = 0;
@@ -84,9 +87,9 @@ function appServer({ cwd, codexBin, log }) {
     }
   });
   const exited = new Promise((resolve) => child.on("exit", (code, signal) => {
-    for (const entry of pending.values()) entry.reject(new Error(`app-server exited (${signal ?? code})`));
+    for (const entry of pending.values()) entry.reject(new Error(exitText(signal, code)));
     pending.clear();
-    resolve(`app-server exited (${signal ?? code})`);
+    resolve(exitText(signal, code));
   }));
   child.on("error", (error) => log(`app-server spawn failed: ${error.message}`));
   return {
@@ -109,19 +112,38 @@ function appServer({ cwd, codexBin, log }) {
 }
 
 /** Child side: one thread, one full-access turn, then release. */
-export async function runFullAccessTurn(job, { report, log, codexBin = resolveCodexBin(), lifetimeMs = TURN_LIFETIME_MS }) {
-  const server = appServer({ cwd: job.cwd, codexBin, log });
+export const INIT_RETRIES = 2;
+
+export async function runFullAccessTurn(job, { report, log, codexBin = resolveCodexBin(), lifetimeMs = TURN_LIFETIME_MS, initPauseMs = 3000 }) {
+  let server;
   const finished = new Map();
   let onFinished = () => {};
   let lifetime;
   let marker;
-  server.onNotification((message) => {
-    if (message.method !== "turn/completed" || !message.params?.turn?.id) return;
-    finished.set(message.params.turn.id, message.params.turn.status);
-    onFinished();
-  });
+  const open = () => {
+    const opened = appServer({ cwd: job.cwd, codexBin, log });
+    opened.onNotification((message) => {
+      if (message.method !== "turn/completed" || !message.params?.turn?.id) return;
+      finished.set(message.params.turn.id, message.params.turn.status);
+      onFinished();
+    });
+    return opened;
+  };
   try {
-    await server.request("initialize", { clientInfo: { name: "Codex Desktop", title: "Codex Desktop (cross-session-bridge full access)", version: "1.0.0" }, capabilities: { experimentalApi: true } });
+    // A cold app-server start under load exited with code 1 four times in a minute (07.10 16:09Z) and then recovered: before any thread exists a failed
+    // initialize is retried on a fresh process (nothing was created, so no duplicate); a later failure is never retried.
+    for (let attempt = 0; ; attempt += 1) {
+      server = open();
+      try {
+        await server.request("initialize", { clientInfo: { name: "Codex Desktop", title: "Codex Desktop (cross-session-bridge full access)", version: "1.0.0" }, capabilities: { experimentalApi: true } });
+        break;
+      } catch (error) {
+        await server.close();
+        if (attempt >= INIT_RETRIES || !/^app-server exited/.test(error.message)) throw error;
+        log(`initialize failed (${error.message}); retry ${attempt + 1}/${INIT_RETRIES}`);
+        await new Promise((resolve) => setTimeout(resolve, initPauseMs * 3 ** attempt));
+      }
+    }
     server.notify("initialized", {});
     const started = await server.request("thread/start", {
       cwd: job.cwd, approvalPolicy: FULL_ACCESS.approvalPolicy, sandbox: FULL_ACCESS.sandbox, threadSource: "agent_created_thread", serviceTier: "default",
@@ -148,7 +170,7 @@ export async function runFullAccessTurn(job, { report, log, codexBin = resolveCo
     await server.request("thread/unsubscribe", { threadId }, 5000).catch((error) => log(`thread/unsubscribe failed: ${error.message}`));
   } finally {
     clearTimeout(lifetime);
-    await server.close();
+    await server?.close();
     if (marker) fs.rmSync(marker, { force: true });
   }
 }
@@ -202,7 +224,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === RUNNER) {
   try {
     let text = "";
     for await (const chunk of process.stdin) text += chunk;
-    await runFullAccessTurn(JSON.parse(text), { report, log });
+    await runFullAccessTurn(JSON.parse(text), { report, log, initPauseMs: Number(process.env.CODEX_BRIDGE_INIT_PAUSE_MS ?? 3000) });
   } catch (error) {
     report({ event: "error", message: error.message });
     process.exitCode = 1;
