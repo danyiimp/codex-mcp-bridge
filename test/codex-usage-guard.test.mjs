@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { assertCodexBudget, codexWeeklyPercent } from '../src/codex-usage-guard.mjs';
+import { assertCodexAvailable, assertCodexBudget, codexWeeklyPercent } from '../src/codex-usage-guard.mjs';
 
 const limitsFile = percent => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-usage-guard-'));
@@ -26,4 +26,13 @@ test('allows explicit override and computer use', () => {
 
 test('allows normal creation at the threshold', () => {
   assert.equal(assertCodexBudget({ model: 'gpt-6-sol', file: limitsFile(85) }), 85);
+});
+
+test('at 100 % Desktop tasks are unavailable whatever the model or flags, with the critic and Devora hint', () => {
+  const file = limitsFile(100);
+  for (const args of [{ model: 'gpt-6-sol' }, { model: 'gpt-6-astra' }, { model: 'gpt-6-sol', allowHighCodexUsage: true }]) {
+    assert.throws(() => assertCodexBudget({ ...args, file }), /недоступен до сброса.*Claude-сабагент.*codex-peer/s);
+  }
+  assert.throws(() => assertCodexAvailable(file), /сброс 14\.10/);
+  assert.equal(assertCodexAvailable(limitsFile(99)), 99);
 });

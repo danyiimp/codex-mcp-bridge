@@ -10,7 +10,7 @@ import { ReplyForwarder } from './reply-forwarder.mjs';
 import { createRuntimeState } from './runtime-state.mjs';
 import { createReloadControl } from './reload-control.mjs';
 import { createCrossSessionTasks, buildOaiMessage } from './cross-session-tasks.mjs';
-import { assertCodexBudget } from './codex-usage-guard.mjs';
+import { assertCodexAvailable, assertCodexBudget } from './codex-usage-guard.mjs';
 import { readRolloutState } from './rollout-state.mjs';
 import { isDesktopRootThreadSource } from './desktop-thread-source.mjs';
 import { activeFullAccessRunner } from './full-access-runner.mjs';
@@ -205,6 +205,7 @@ const handlers = {
   },
   async send_to_oai_session({ target, message, images, request_id, reply_mode, model, effort }) {
     runtime.assertCurrent();
+    assertCodexAvailable();
     assertCodexModel(model, effort);
     const source = await claudeSource();
     let destination;
