@@ -4,11 +4,20 @@ import path from 'node:path';
 
 export const CODEX_WEEKLY_LIMIT = 85;
 
-export function codexWeeklyPercent(file = path.join(os.homedir(), '.codex-peers', 'limits.json')) {
+const HUB_LIMITS = path.join(process.env.AGENTS_HUB_HOME ?? os.homedir(), '.agents-hub-bot', 'codex-limits.json');
+const HUB_LIMITS_FRESH_MS = 30 * 60 * 1000;
+
+// limits.json is overwritten by every rateLimits update, including blank ones (08.10: primary = null at 7d = 100 %, so this guard saw null and let a Desktop critic spend paid credits);
+// the dispatcher keeps the last good reading in codex-limits.json (refreshed every 2 min), trusted while it is younger than 30 min.
+export function codexWeeklyPercent(file = path.join(os.homedir(), '.codex-peers', 'limits.json'), fallback = HUB_LIMITS) {
   try {
     const limits = JSON.parse(fs.readFileSync(file, 'utf8')).rateLimits;
     const weekly = [limits?.primary, limits?.secondary].find(window => window?.windowDurationMins === 10080);
-    return Number.isFinite(weekly?.usedPercent) ? weekly.usedPercent : null;
+    if (Number.isFinite(weekly?.usedPercent)) return weekly.usedPercent;
+  } catch { /* fall through */ }
+  try {
+    const known = JSON.parse(fs.readFileSync(fallback, 'utf8'));
+    return Number.isFinite(known.weekly) && Date.now() - known.ts * 1000 < HUB_LIMITS_FRESH_MS ? known.weekly : null;
   } catch {
     return null;
   }

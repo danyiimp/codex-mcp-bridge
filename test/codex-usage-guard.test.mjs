@@ -36,3 +36,15 @@ test('at 100 % Desktop tasks are unavailable whatever the model or flags, with t
   assert.throws(() => assertCodexAvailable(file), /сброс 14\.10/);
   assert.equal(assertCodexAvailable(limitsFile(99)), 99);
 });
+
+test('a blank limits.json falls back to the last good reading while it is fresh', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-usage-fallback-'));
+  const blank = path.join(dir, 'limits.json');
+  const good = path.join(dir, 'codex-limits.json');
+  fs.writeFileSync(blank, JSON.stringify({ rateLimits: { primary: null, secondary: null, credits: null } }));
+  assert.equal(codexWeeklyPercent(blank, good), null);
+  fs.writeFileSync(good, JSON.stringify({ weekly: 100, ts: Date.now() / 1000 - 60 }));
+  assert.equal(codexWeeklyPercent(blank, good), 100);
+  fs.writeFileSync(good, JSON.stringify({ weekly: 100, ts: Date.now() / 1000 - 3 * 3600 }));
+  assert.equal(codexWeeklyPercent(blank, good), null, 'a reading older than 30 min is not trusted');
+});
