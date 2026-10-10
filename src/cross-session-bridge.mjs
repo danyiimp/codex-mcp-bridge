@@ -11,6 +11,7 @@ import { createRuntimeState } from './runtime-state.mjs';
 import { createReloadControl } from './reload-control.mjs';
 import { createCrossSessionTasks, buildOaiMessage } from './cross-session-tasks.mjs';
 import { assertCodexAvailable, assertCodexBudget } from './codex-usage-guard.mjs';
+import { readRemoteSession } from './remote-peers-client.mjs';
 import { readRolloutState } from './rollout-state.mjs';
 import { isDesktopRootThreadSource } from './desktop-thread-source.mjs';
 import { activeFullAccessRunner } from './full-access-runner.mjs';
@@ -96,14 +97,14 @@ async function oaiList() {
   return [...new Map(rows.map(row => [row.id, row])).values()];
 }
 function claudeList(diagnostics) {
-  return listClaudeSessions({ diagnostics }).filter(row => row.pid !== process.pid && row.entrypoint === 'cli');
+  return listClaudeSessions({ diagnostics }).filter(row => row.pid !== process.pid && (row.entrypoint === 'cli' || row.entrypoint === 'remote-peer' && row.remotePeer?.entrypoint === 'cli'));
 }
 async function claudeSource() {
   const config = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
   let ownRegistry;
   try { ownRegistry = fs.realpathSync.native(path.join(config, 'sessions')); }
   catch { throw new Error('Не найден registry вызывающего Claude-профиля.'); }
-  const rows = claudeList().filter(row => row.dir === ownRegistry);
+  const rows = claudeList().filter(row => row.dir === ownRegistry && row.entrypoint === 'cli');
   let expectedPid = process.ppid;
   for (const processInfo of await readProcessAncestry({ parentPid: process.ppid, maxDepth: 10 })) {
     if (processInfo.pid !== expectedPid) throw new Error('Не удалось подтвердить цепочку процессов вызывающей Claude Code-сессии.');
@@ -175,6 +176,12 @@ const handlers = {
   get_claude_request: (args, extra) => claudeTasks(extra).receipt(args),
   async read_claude_session({ target, cwd, profile = defaultClaudeProfile(), turn_limit = 3 }, extra) {
     const source = codexSource(extra);
+    const remote = claudeList().find(row => row.sessionId === target && row.remotePeer);
+    if (remote) {
+      assertClaudeSessionProcess(remote);
+      if (cwd !== undefined && cwd !== remote.cwd) throw new Error('Remote cwd does not match the selected session.');
+      return readRemoteSession(target, turn_limit);
+    }
     cwd = canonicalDirectory(cwd ?? source.cwd);
     const configDir = resolveClaudeProfile(profile);
     const transcript = readClaudeSession({ target, cwd, configDir, turnLimit: turn_limit });
@@ -232,7 +239,7 @@ const handlers = {
   async list_claude_sessions({ query = '' } = {}) {
     const discovery = {};
     const sessions = claudeList(discovery).filter(row => !query || row.name?.toLowerCase().includes(query.toLowerCase()))
-      .map(({ sessionId, name, cwd, pid, dir, profileSources }) => ({ sessionId, name, cwd, pid, registryDirectory: dir, profileSources }));
+      .map(({ sessionId, name, cwd, pid, dir, profileSources, remotePeer }) => ({ sessionId, name, cwd, pid, registryDirectory: dir, profileSources, remotePeer }));
     return { sessions, discovery, runtime: runtime.status() };
   },
   async send_to_claude_session({ target, message, wait_seconds = 0, model, effort }, extra) {
@@ -250,7 +257,7 @@ const handlers = {
           assertClaudeSessionProcess(destination);
         },
       });
-    return { messageId: result.msgId, status: result.reply ? 'reply_received' : result.delivery?.status ?? 'sent_unconfirmed', reply: result.reply?.text ?? null, targetSessionId: destination.sessionId, note: 'Не повторяйте отправку из-за timeout; проверяйте get_delivery.' };
+    return { messageId: result.msgId, status: result.reply ? 'reply_received' : result.delivery?.status ?? 'sent_unconfirmed', reply: result.reply?.text ?? null, targetSessionId: destination.sessionId, remotePeer: destination.remotePeer, note: 'Не повторяйте отправку из-за timeout; проверяйте get_delivery.' };
   },
   async get_delivery({ message_id }) {
     return { receipt: peer.readDelivery(message_id), forwarding: forwarder.read(message_id) };
@@ -292,7 +299,7 @@ const schemas = {
 };
 const descriptions = {
   create_claude_session: 'Create a persistent local Claude Code session using native --background, in an existing absolute cwd (defaults to caller project). Codex native MCP callers only. Requires workspace trust in Claude. Pin model (fable/opus/sonnet/haiku) and effort (low/medium/high/xhigh/max) as needed. permission_mode defaults to manual; explicit bypassPermissions disables tool approvals and requires a verified full-access caller. profile selects default Claude, CLAUDE_CONFIG_DIR when configured, or an optional CCS profile; CCS profiles launch through ccs <profile> to preserve their network routing and environment. Omitted profile uses CROSS_SESSION_BRIDGE_CLAUDE_PROFILE when configured, otherwise default. mcp_mode defaults to inherit; none skips external MCP servers for lightweight tasks. request_id is scoped to caller thread and cwd: reuse identical arguments to recover the same launch; changed launch parameters are rejected. Unknown outcomes are never relaunched. Session name includes a recovery marker. Read its result with read_claude_session using returned sessionId and cwd/profile; continue through send_to_claude_session. Native background CLI support required. Acceptance is not completion; permission prompts may need claude attach.',
-  read_claude_session: 'Read bounded recent text from a persistent local Claude Code conversation by exact session UUID and project cwd. profile defaults to default; use the same profile as creation. Returns native status when available, explicitly separate from transcript status. Does not create, resume, or send. Omits thinking, tool payloads, images and inline data.',
+  read_claude_session: 'Read bounded recent text from a local or connected remote Claude Code conversation by exact session UUID and project cwd. profile defaults to default; use the same profile as creation. Returns native status when available, explicitly separate from transcript status. Does not create, resume, or send. Omits thinking, tool payloads, images and inline data.',
   get_claude_request: 'Recover the creation outcome scoped to the calling Codex thread, cwd, and request_id. Reads the durable receipt and native background session catalog. Never launches again, including after timeout or worker restart.',
   create_oai_session: 'Create and initialize one persistent Codex Desktop task in an exact saved local project. The task always runs with FULL ACCESS (approval_policy never, danger-full-access sandbox, network on): it can modify any file and use the network without an approval click. Its first turn starts through a local Codex app-server; the task appears in Codex Desktop and continues there. Requires a stable request_id; reuse it to recover the same creation without sending twice. Returns a thread ID for subsequent send_to_oai_session calls. Default reply_mode=read: recipient finishes with a final result for read_oai_session. Callback is opt-in and supported for user and agent-created Desktop tasks with verified active turns and supported permissions. Optional images are validated local files; the recipient loads them with view_image. Claude Code callers only. Optional model + effort pin this task (omitted = the Desktop default model). The slug must exist in the Codex catalog and the effort must be supported by that model, otherwise the call fails before sending. When Codex weekly usage exceeds 85%, creation is blocked unless model=gpt-6-astra for computer use or allow_high_codex_usage=true is explicitly supplied.',
   read_oai_session: 'Read recent turns and status of an existing local Codex Desktop task by exact ID. Does not send, resume, fork, or create. Use after acceptance or an uncertain delivery to recover results. Claude Code callers only.',

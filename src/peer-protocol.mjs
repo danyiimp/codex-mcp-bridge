@@ -157,6 +157,7 @@ function readProcessStart(pid) {
       const shell = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
       return execFileSync(shell, ["-NoProfile", "-NonInteractive", "-Command", `[System.Diagnostics.Process]::GetProcessById(${Number(pid)}).StartTime.ToUniversalTime().ToFileTimeUtc().ToString()`], { timeout: PROCESS_START_TIMEOUT_MS, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }).toString().trim();
     }
+    if (process.platform === "linux") return fs.readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1].split(" ")[19];
     return execFileSync(PS_BIN, ["-o", "lstart=", "-p", String(pid)], { env: { ...process.env, LC_ALL: "C", TZ: "UTC" }, timeout: PROCESS_START_TIMEOUT_MS }).toString().trim();
   } catch {
     return null;
@@ -227,6 +228,7 @@ export function listClaudeSessions({ includeDead = false, includeBridges = false
       cwd: entry.cwd ?? null,
       kind: entry.kind ?? null,
       entrypoint: entry.entrypoint ?? null,
+      remotePeer: entry.remotePeer ?? null,
       startedAt: entry.startedAt ?? null,
       processStart,
       socket: entry.messagingSocketPath,
