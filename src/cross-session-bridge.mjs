@@ -11,7 +11,7 @@ import { createRuntimeState } from './runtime-state.mjs';
 import { createReloadControl } from './reload-control.mjs';
 import { createCrossSessionTasks, buildOaiMessage } from './cross-session-tasks.mjs';
 import { assertCodexAvailable, assertCodexBudget } from './codex-usage-guard.mjs';
-import { readRemoteSession } from './remote-peers-client.mjs';
+import { readRemoteSession, remoteTransportStatus } from './remote-peers-client.mjs';
 import { readRolloutState } from './rollout-state.mjs';
 import { isDesktopRootThreadSource } from './desktop-thread-source.mjs';
 import { activeFullAccessRunner } from './full-access-runner.mjs';
@@ -240,7 +240,7 @@ const handlers = {
     const discovery = {};
     const sessions = claudeList(discovery).filter(row => !query || row.name?.toLowerCase().includes(query.toLowerCase()))
       .map(({ sessionId, name, cwd, pid, dir, profileSources, remotePeer }) => ({ sessionId, name, cwd, pid, registryDirectory: dir, profileSources, remotePeer }));
-    return { sessions, discovery, runtime: runtime.status() };
+    return { sessions, discovery, runtime: runtime.status(), transport: remoteTransportStatus(), note: 'Native ListAgents exposes live proxies only. transport.unavailableSessions retains last-seen remote sessions during disconnect. Empty VM results do not prove there are no VM sessions.' };
   },
   async send_to_claude_session({ target, message, wait_seconds = 0, model, effort }, extra) {
     runtime.assertCurrent();
@@ -257,7 +257,7 @@ const handlers = {
           assertClaudeSessionProcess(destination);
         },
       });
-    return { messageId: result.msgId, status: result.reply ? 'reply_received' : result.delivery?.status ?? 'sent_unconfirmed', reply: result.reply?.text ?? null, targetSessionId: destination.sessionId, remotePeer: destination.remotePeer, note: 'Не повторяйте отправку из-за timeout; проверяйте get_delivery.' };
+    return { messageId: result.msgId, status: result.reply ? 'reply_received' : result.delivery?.status ?? 'sent_unconfirmed', reply: result.reply?.text ?? null, targetSessionId: destination.sessionId, remotePeer: destination.remotePeer, transport: destination.remotePeer ? remoteTransportStatus() : null, note: 'Не повторяйте отправку из-за timeout; проверяйте get_delivery. VM receipt и reply могут задержаться или не прийти после разрыва связи.' };
   },
   async get_delivery({ message_id }) {
     return { receipt: peer.readDelivery(message_id), forwarding: forwarder.read(message_id) };
