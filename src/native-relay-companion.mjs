@@ -734,18 +734,13 @@ export function createNativeRelayLifecycle({ nativeTools, relays, log: logFn = (
 const invokedDirectly =
   Boolean(process.argv[1]) && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
 
-if (invokedDirectly) {
-  const mcp = new McpServer(
-    { name: "codex-native-relay", version: VERSION },
-    {
-      instructions:
-        "Companion process for the Codex Desktop native relay. It carries no work of its own: it accepts " +
-        "messages from claude-bridge on a private local socket and asks the Codex Desktop app-server that " +
-        "launched it to deliver them into an already-open thread, so that thread keeps its writer lock.",
-    },
-  );
-
-  const nativeTools = new NativeToolsClient();
+/**
+ * The relay listeners, their lifecycle and a factory for the companion's MCP surface. The stdio companion builds one
+ * with a native tools client that finds the Desktop pipe through its own parent; the shared daemon
+ * (bridge-daemon.mjs) builds one whose client resolves the pipe through the app-server of a connected thread shim and
+ * serves the MCP surface once per shim connection.
+ */
+export function createNativeRelayCompanion({ nativeTools = new NativeToolsClient() } = {}) {
   const dispatch = (args, options) => nativeTools.dispatch(args, options);
 
   const hardened = hardenedBridgeEnabled();
@@ -775,53 +770,71 @@ if (invokedDirectly) {
   const lifecycle = createNativeRelayLifecycle({ nativeTools, relays: strictDesktop ? [accountRelay] : [relay, desktopRelay, accountRelay], log });
   const reload = createReloadControl({ entry: "native-relay-companion.mjs", ...lifecycle });
 
-  mcp.registerTool(
-    "native_relay_status",
-    {
-      title: "Check the Codex Desktop native relay",
-      description:
-        "Report the local socket this companion listens on, the executor thread it dispatches through, and " +
-        "whether the relay is ready to deliver messages into threads Codex Desktop has open.",
-      inputSchema: {},
-      annotations: {
-        readOnlyHint: true,
-        openWorldHint: false,
+  const createServer = () => {
+    const mcp = new McpServer(
+      { name: "codex-native-relay", version: VERSION },
+      {
+        instructions:
+          "Companion process for the Codex Desktop native relay. It carries no work of its own: it accepts " +
+          "messages from claude-bridge on a private local socket and asks the Codex Desktop app-server that " +
+          "launched it to deliver them into an already-open thread, so that thread keeps its writer lock.",
       },
-    },
-    async () => reload.run(async () => {
-      const listening = await (strictDesktop ? accountRelay : relay).isListening();
-      let executor = "(unconfigured)";
-      try {
-        const resolved = resolveRelayThreadId();
-        executor = `${resolved.threadId}  (from ${resolved.source})`;
-      } catch (err) {
-        executor = err.message;
-      }
-      return {
-        structuredContent: { runtime: runtime.status() },
-        content: [
-          {
-            type: "text",
-            text: [
-              `platform:       ${PLATFORM_LABEL} (${process.platform}/${process.arch})`,
-              `companion:      codex-native-relay ${VERSION}`,
-              `runtime state:  ${runtime.status().current ? "current" : "stale"} (${reload.inspect().phase}, PID ${process.pid})`,
-               `relay socket:   ${strictDesktop ? "disabled by hardened Desktop profile" : relay.started ? relay.socketPath : `${relay.socketPath} (${listening ? "shared companion listening" : "not listening"})`}`,
-               `desktop tasks:  ${strictDesktop ? "disabled by hardened Desktop profile" : `${desktopRelay.socketPath} (${await desktopRelay.isListening() ? "listening" : "not listening"})`}`,
-              `account relay:  ${accountRelay.socketPath} (protocol ${ACCOUNT_RELAY_PROTOCOL_VERSION}, ${await accountRelay.isListening() ? "listening" : "not listening"})`,
-              `executor:       ${executor}`,
-              `dispatch:       ${process.env.CODEX_NATIVE_RELAY_METHOD ?? NATIVE_DISPATCH_METHOD}`,
-              `native pipe:    ${nativeTools.socketPath ?? "unavailable (requires Codex Desktop)"}`,
-            ].join("\n"),
-          },
-        ],
-      };
-    }),
-  );
+    );
+    mcp.registerTool(
+      "native_relay_status",
+      {
+        title: "Check the Codex Desktop native relay",
+        description:
+          "Report the local socket this companion listens on, the executor thread it dispatches through, and " +
+          "whether the relay is ready to deliver messages into threads Codex Desktop has open.",
+        inputSchema: {},
+        annotations: {
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
+      },
+      async () => reload.run(async () => {
+        const listening = await (strictDesktop ? accountRelay : relay).isListening();
+        let executor = "(unconfigured)";
+        try {
+          const resolved = resolveRelayThreadId();
+          executor = `${resolved.threadId}  (from ${resolved.source})`;
+        } catch (err) {
+          executor = err.message;
+        }
+        return {
+          structuredContent: { runtime: runtime.status() },
+          content: [
+            {
+              type: "text",
+              text: [
+                `platform:       ${PLATFORM_LABEL} (${process.platform}/${process.arch})`,
+                `companion:      codex-native-relay ${VERSION}`,
+                `runtime state:  ${runtime.status().current ? "current" : "stale"} (${reload.inspect().phase}, PID ${process.pid})`,
+                 `relay socket:   ${strictDesktop ? "disabled by hardened Desktop profile" : relay.started ? relay.socketPath : `${relay.socketPath} (${listening ? "shared companion listening" : "not listening"})`}`,
+                 `desktop tasks:  ${strictDesktop ? "disabled by hardened Desktop profile" : `${desktopRelay.socketPath} (${await desktopRelay.isListening() ? "listening" : "not listening"})`}`,
+                `account relay:  ${accountRelay.socketPath} (protocol ${ACCOUNT_RELAY_PROTOCOL_VERSION}, ${await accountRelay.isListening() ? "listening" : "not listening"})`,
+                `executor:       ${executor}`,
+                `dispatch:       ${process.env.CODEX_NATIVE_RELAY_METHOD ?? NATIVE_DISPATCH_METHOD}`,
+                `native pipe:    ${nativeTools.socketPath ?? "unavailable (requires Codex Desktop)"}`,
+              ].join("\n"),
+            },
+          ],
+        };
+      }),
+    );
+    return mcp;
+  };
+  const readySocket = () => strictDesktop ? accountRelay.socketPath : relay.started ? relay.socketPath : "socket down";
+  return { lifecycle, reload, createServer, readySocket };
+}
 
+if (invokedDirectly) {
+  const { lifecycle, reload, createServer, readySocket } = createNativeRelayCompanion();
+  const mcp = createServer();
   if (!reload.staged) void lifecycle.activate().catch((error) => log(`native relay startup failed: ${error.message}`));
   mcp.server.onclose = () => { void lifecycle.stop(); };
   await mcp.connect(new StdioServerTransport());
   reload.listen();
-  log(`ready on ${PLATFORM_LABEL} (${strictDesktop ? accountRelay.socketPath : relay.started ? relay.socketPath : "socket down"})`);
+  log(`ready on ${PLATFORM_LABEL} (${readySocket()})`);
 }

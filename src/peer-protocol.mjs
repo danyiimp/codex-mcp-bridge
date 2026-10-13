@@ -151,7 +151,7 @@ const PROCESS_START_TIMEOUT_MS = 30000;
  * send. The budget now matches what the suites already give their own
  * identity reads.
  */
-function readProcessStart(pid) {
+export function readProcessStart(pid) {
   try {
     if (IS_WINDOWS) {
       const shell = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
@@ -429,11 +429,13 @@ export function readTranscriptReply(sessionId, cwd, msgId) {
  * answer on and the conversation stays one-way.
  */
 export class PeerEndpoint {
-  constructor({ name = `codex-${process.pid}`, cwd = process.cwd(), log = () => {}, env = process.env, protectSocket } = {}) {
+  // pid: the process the registry entry and socket stand for. The shared daemon serves each Codex thread through
+  // that thread's own stdio shim and passes the shim's pid, so the peer lives and dies with the thread as before.
+  constructor({ name = `codex-${process.pid}`, cwd = process.cwd(), log = () => {}, env = process.env, protectSocket, pid = process.pid, processHandlers = true } = {}) {
     this.name = name;
     this.cwd = cwd;
     this.log = log;
-    this.pid = process.pid;
+    this.pid = pid;
     this.socketPath = peerSocketPath(this.pid);
     this.registryPath = path.join(sessionsDir(), `${this.pid}.json`);
     this.keyPath = null;
@@ -453,7 +455,7 @@ export class PeerEndpoint {
     this.connections = new Set();
     this.activityRevision = 0;
     this.reloadPaused = false;
-    this.processHandlersRegistered = false;
+    this.processHandlersRegistered = !processHandlers;
     this.strict = hardenedBridgeEnabled(env);
     this.protectSocket = protectSocket ?? (hardenedBridgeEnabled(env) ? protectCurrentUserPipe : null);
     this.aclReady = !IS_WINDOWS || !this.protectSocket;

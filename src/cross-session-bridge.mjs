@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -21,32 +22,45 @@ import { readProcessAncestry } from './claude-sender-context.mjs';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f-]{27}$/i;
 const relay = new NativeDesktopRelay({ timeoutMs: 20000 });
-const peer = new PeerEndpoint({ name: `oai-bridge-${process.pid}`, cwd: process.cwd() });
 const runtime = createRuntimeState();
-let boundSource = null;
-const forwarder = new ReplyForwarder({
-  minIntervalMs: 5000, maxPerSession: 50,
-  deliver: (threadId, record) => relay.sendMessage(threadId,
-    `[Сообщение от Claude Code; источник ${record.fromSocket}; ответ на ${record.inReplyTo ?? 'предыдущий обмен'}]\n\n${record.text}`),
-});
-peer.onMessage(record => {
-  const destination = record.replyThreadId ?? boundSource?.threadId;
-  if (destination) forwarder.enqueue(record, destination);
-});
+// A Codex thread's reply address: its peer entry in Claude's registry, the thread it is bound to and the forwarder that
+// delivers Claude's replies into that thread. A stdio worker keeps one for its own process; the shared daemon
+// (bridge-daemon.mjs) keeps one per connected thread shim, under the shim's pid, and runs each call inside callerContext.
+function createCodexCaller({ pid = process.pid, processHandlers = true } = {}) {
+  const caller = { pid, boundSource: null, peer: new PeerEndpoint({ name: `oai-bridge-${pid}`, cwd: process.cwd(), pid, processHandlers }) };
+  caller.forwarder = new ReplyForwarder({
+    minIntervalMs: 5000, maxPerSession: 50,
+    deliver: (threadId, record) => relay.sendMessage(threadId,
+      `[Сообщение от Claude Code; источник ${record.fromSocket}; ответ на ${record.inReplyTo ?? 'предыдущий обмен'}]\n\n${record.text}`),
+  });
+  caller.peer.onMessage(record => {
+    const destination = record.replyThreadId ?? caller.boundSource?.threadId;
+    if (destination) caller.forwarder.enqueue(record, destination);
+  });
+  return caller;
+}
+const callerContext = new AsyncLocalStorage();
+const ownCaller = createCodexCaller();
+const currentCaller = () => callerContext.getStore() ?? ownCaller;
+const callerReloadReason = caller => caller.peer.reloadReason() ?? caller.forwarder.reloadReason();
+function exportCaller(caller) {
+  return { boundSource: caller.boundSource, peer: caller.peer.exportReloadState(), forwarding: caller.forwarder.exportReloadState() };
+}
+function restoreCaller(caller, state) {
+  if (state.boundSource !== null && (!uuid.test(state.boundSource?.threadId ?? '') || typeof state.boundSource?.cwd !== 'string')) throw new Error('Invalid bridge sender reload state');
+  caller.boundSource = state.boundSource;
+  caller.peer.restoreReloadState(state.peer);
+  caller.forwarder.restoreReloadState(state.forwarding);
+  if (caller.boundSource) caller.peer.cwd = caller.boundSource.cwd;
+}
 const reload = createReloadControl({
   entry: 'cross-session-bridge.mjs',
-  inspect: () => peer.reloadReason() ?? forwarder.reloadReason(),
-  quiesce: () => peer.quiesce(),
-  exportState: () => ({ boundSource, peer: peer.exportReloadState(), forwarding: forwarder.exportReloadState() }),
-  restore: state => {
-    if (state.boundSource !== null && (!uuid.test(state.boundSource?.threadId ?? '') || typeof state.boundSource?.cwd !== 'string')) throw new Error('Invalid bridge sender reload state');
-    boundSource = state.boundSource;
-    peer.restoreReloadState(state.peer);
-    forwarder.restoreReloadState(state.forwarding);
-    if (boundSource) peer.cwd = boundSource.cwd;
-  },
-  activate: () => boundSource ? peer.start() : undefined,
-  resume: () => boundSource ? peer.resume() : (peer.reloadPaused = false),
+  inspect: () => callerReloadReason(ownCaller),
+  quiesce: () => ownCaller.peer.quiesce(),
+  exportState: () => exportCaller(ownCaller),
+  restore: state => restoreCaller(ownCaller, state),
+  activate: () => ownCaller.boundSource ? ownCaller.peer.start() : undefined,
+  resume: () => ownCaller.boundSource ? ownCaller.peer.resume() : (ownCaller.peer.reloadPaused = false),
 });
 
 function textResult(value) {
@@ -147,14 +161,14 @@ function codexSource(extra = {}) {
   else throw new Error('Permission mode отправителя пока не поддерживается; настройки адресата не изменялись.');
   return { threadId, turnId: context.turn_id, cwd: context.cwd, permissionMode };
 }
-async function bind(source) {
-  if (boundSource && boundSource.threadId !== source.threadId) throw new Error('Этот MCP process уже связан с другой задачей. Переподключите server отдельно для текущей задачи.');
+async function bind(caller, source) {
+  if (caller.boundSource && caller.boundSource.threadId !== source.threadId) throw new Error('Этот MCP process уже связан с другой задачей. Переподключите server отдельно для текущей задачи.');
   const response = await native('read_thread', { threadId: source.threadId, turnLimit: 1 });
   if (response.thread?.id !== source.threadId) throw new Error('Desktop не подтвердил задачу отправителя.');
-  boundSource = { ...source, title: response.thread.title };
-  peer.cwd = source.cwd;
-  await peer.start();
-  peer.rename(`oai ${response.thread.title} ${source.threadId.slice(0, 8)}`, { threadId: source.threadId });
+  caller.boundSource = { ...source, title: response.thread.title };
+  caller.peer.cwd = source.cwd;
+  await caller.peer.start();
+  caller.peer.rename(`oai ${response.thread.title} ${source.threadId.slice(0, 8)}`, { threadId: source.threadId });
 }
 
 const tasks = createCrossSessionTasks({ relay, getSource: claudeSource, assertCurrent: () => runtime.assertCurrent() });
@@ -247,9 +261,10 @@ const handlers = {
     const source = codexSource(extra);
     const destination = choose(claudeList(), target, 'sessionId', 'name');
     assertClaudeSessionProcess(destination);
-    await bind(source);
-    const result = await peer.sendAndWait(destination.socket,
-      `[От OAI-задачи "${boundSource.title}"; threadId=${source.threadId}]${model || effort ? `\n[Запрошено исполнение: model=${model ?? 'как у сессии'}, effort=${effort ?? 'как у сессии'} — если это не твоя текущая модель/effort, выполни задачу субагентом Agent(model=…) с этим effort и верни его результат]` : ''}\n${message}\n\nОтветь через native SendMessage по reply address этого сообщения. Сохраняй разрешения своей сессии.`, {
+    const caller = currentCaller();
+    await bind(caller, source);
+    const result = await caller.peer.sendAndWait(destination.socket,
+      `[От OAI-задачи "${caller.boundSource.title}"; threadId=${source.threadId}]${model || effort ? `\n[Запрошено исполнение: model=${model ?? 'как у сессии'}, effort=${effort ?? 'как у сессии'} — если это не твоя текущая модель/effort, выполни задачу субагентом Agent(model=…) с этим effort и верни его результат]` : ''}\n${message}\n\nОтветь через native SendMessage по reply address этого сообщения. Сохраняй разрешения своей сессии.`, {
         timeoutMs: wait_seconds * 1000, permissionMode: source.permissionMode, replyThreadId: source.threadId,
         beforeSend: () => {
           const now = codexSource(extra);
@@ -260,6 +275,7 @@ const handlers = {
     return { messageId: result.msgId, status: result.reply ? 'reply_received' : result.delivery?.status ?? 'sent_unconfirmed', reply: result.reply?.text ?? null, targetSessionId: destination.sessionId, remotePeer: destination.remotePeer, transport: destination.remotePeer ? remoteTransportStatus() : null, note: 'Не повторяйте отправку из-за timeout; проверяйте get_delivery. VM receipt и reply могут задержаться или не прийти после разрыва связи.' };
   },
   async get_delivery({ message_id }) {
+    const { peer, forwarder } = currentCaller();
     return { receipt: peer.readDelivery(message_id), forwarding: forwarder.read(message_id) };
   },
   async bridge_status(_args, extra = {}) {
@@ -274,7 +290,7 @@ const handlers = {
     const liveSessions = claudeList(discovery);
     const turnMetadata = extra._meta?.['x-codex-turn-metadata'];
     const hostContext = turnMetadata ? { threadId: turnMetadata.thread_id ?? null, turnId: turnMetadata.turn_id ?? null, threadSource: turnMetadata.thread_source ?? null } : null;
-    return { hostContext, ready: true, apiVersion: '1.4.0', capabilities: { create_claude_session: true, read_claude_session: true, get_claude_request: true, claude_background_sessions: true, full_access_tasks: true, create_oai_session: true, read_oai_session: true, get_oai_request: true, image_references: true, persistent_tasks: true, compact_image_history: true, read_reply_mode: true }, transport: 'native Desktop relay + Claude Code inbox socket', caller, source: boundSource, forwarding: forwarder.status(), runtime: runtime.status(), discovery: { ...discovery, liveSessionCount: liveSessions.length } };
+    return { hostContext, ready: true, apiVersion: '1.4.0', capabilities: { create_claude_session: true, read_claude_session: true, get_claude_request: true, claude_background_sessions: true, full_access_tasks: true, create_oai_session: true, read_oai_session: true, get_oai_request: true, image_references: true, persistent_tasks: true, compact_image_history: true, read_reply_mode: true }, transport: 'native Desktop relay + Claude Code inbox socket', caller, source: currentCaller().boundSource, forwarding: currentCaller().forwarder.status(), runtime: runtime.status(), discovery: { ...discovery, liveSessionCount: liveSessions.length } };
   },
 };
 
@@ -309,6 +325,65 @@ const descriptions = {
 };
 const mutatingTools = new Set(['create_claude_session', 'create_oai_session', 'send_to_oai_session', 'send_to_claude_session']);
 
+const INSTRUCTIONS = 'From Claude Code, create_oai_session starts a persistent native Codex Desktop task, send_to_oai_session continues its exact ID, and read_oai_session/get_oai_request recover results without resending. Use reply_mode=read for delegated tasks; this is the creation default. Local references carry task context; the caller specifies the requested workflow. From Codex, create_claude_session starts a persistent native Claude Code background session with explicit project/model/effort/permissions; read_claude_session/get_claude_request recover results. list_claude_sessions/send_to_claude_session reach live Claude terminals where the sender context supports callbacks. Resolve exact names to IDs; never replace an existing task. Tasks created by create_oai_session run with full access (approval never, danger-full-access sandbox, network on) and keep it on continuation. Acceptance is not completion. Never resend an uncertain delivery or forward acknowledgements endlessly. Pin the model explicitly: model+effort on create_oai_session/send_to_oai_session (otherwise the Desktop default model runs) and on send_to_claude_session; which model fits a task is decided by the calling skill or workflow.';
+const codexCallers = new Set();
+let inFlight = 0;
+let suspending = false;
+
+function createMcpServer(caller) {
+  const mcp = new McpServer({ name: 'cross-session-bridge', version: '1.4.0' }, { instructions: INSTRUCTIONS });
+  for (const [name, handler] of Object.entries(handlers)) mcp.registerTool(name, { description: descriptions[name] ?? name.replaceAll('_', ' '), inputSchema: schemas[name], annotations: { readOnlyHint: !mutatingTools.has(name), destructiveHint: false, openWorldHint: true } }, async (args, extra) => {
+    if (suspending) return { content: [{ type: 'text', text: 'The shared bridge daemon is restarting to load new code; nothing was dispatched. Call again in a few seconds.' }], isError: true };
+    inFlight++;
+    try { return await callerContext.run(caller, () => reload.run(async () => textResult(await handler(args, extra)))); }
+    catch (error) { return { content: [{ type: 'text', text: error.message }], isError: true }; }
+    finally { inFlight--; }
+  });
+  return mcp;
+}
+
+// Shared daemon entry: one MCP server per connected Codex thread shim. restore is the state suspendCodexCallers()
+// exported for this shim before the previous daemon exited, so the thread keeps its Claude reply address.
+export async function serveCodexConnection(stream, { pid, restore = null }) {
+  const caller = createCodexCaller({ pid, processHandlers: false });
+  if (restore) {
+    restoreCaller(caller, restore);
+    if (caller.boundSource) await caller.peer.start();
+  }
+  codexCallers.add(caller);
+  const mcp = createMcpServer(caller);
+  stream.once('close', () => {
+    codexCallers.delete(caller);
+    if (!caller.suspended) { caller.forwarder.close(); caller.peer.stop(); }
+    void mcp.close();
+  });
+  await mcp.connect(new StdioServerTransport(stream, stream));
+  stream.resume();
+}
+export function codexBridgeIdle() {
+  return inFlight === 0 && [...codexCallers].every(caller => !callerReloadReason(caller));
+}
+export async function suspendCodexCallers() {
+  const bound = [...codexCallers].filter(caller => caller.boundSource);
+  suspending = true;
+  try {
+    if (inFlight) throw new Error('A tool call started while the daemon was preparing to restart');
+    for (const caller of bound) {
+      caller.suspended = true;
+      await caller.peer.quiesce();
+    }
+    return bound.map(caller => ({ pid: caller.pid, procStart: caller.peer.registry?.procStart ?? null, state: exportCaller(caller) }));
+  } catch (error) {
+    for (const caller of bound.filter(caller => caller.suspended)) {
+      caller.suspended = false;
+      await caller.peer.resume();
+    }
+    suspending = false;
+    throw error;
+  }
+}
+export const bridgeRuntime = runtime;
+
 if (process.argv[2] === '--cli') {
   try {
     const input = JSON.parse(process.argv[3]);
@@ -316,14 +391,10 @@ if (process.argv[2] === '--cli') {
     const args = z.object(schemas[input.tool]).strict().parse(input.arguments ?? {});
     console.log(JSON.stringify(await handlers[input.tool](args, {})));
   } catch (error) { console.error(error.message); process.exitCode = 1; }
-  peer.stop();
-} else {
-  const mcp = new McpServer({ name: 'cross-session-bridge', version: '1.4.0' }, { instructions: 'From Claude Code, create_oai_session starts a persistent native Codex Desktop task, send_to_oai_session continues its exact ID, and read_oai_session/get_oai_request recover results without resending. Use reply_mode=read for delegated tasks; this is the creation default. Local references carry task context; the caller specifies the requested workflow. From Codex, create_claude_session starts a persistent native Claude Code background session with explicit project/model/effort/permissions; read_claude_session/get_claude_request recover results. list_claude_sessions/send_to_claude_session reach live Claude terminals where the sender context supports callbacks. Resolve exact names to IDs; never replace an existing task. Tasks created by create_oai_session run with full access (approval never, danger-full-access sandbox, network on) and keep it on continuation. Acceptance is not completion. Never resend an uncertain delivery or forward acknowledgements endlessly. Pin the model explicitly: model+effort on create_oai_session/send_to_oai_session (otherwise the Desktop default model runs) and on send_to_claude_session; which model fits a task is decided by the calling skill or workflow.' });
-  for (const [name, handler] of Object.entries(handlers)) mcp.registerTool(name, { description: descriptions[name] ?? name.replaceAll('_', ' '), inputSchema: schemas[name], annotations: { readOnlyHint: !mutatingTools.has(name), destructiveHint: false, openWorldHint: true } }, async (args, extra) => {
-    try { return await reload.run(async () => textResult(await handler(args, extra))); }
-    catch (error) { return { content: [{ type: 'text', text: error.message }], isError: true }; }
-  });
+  ownCaller.peer.stop();
+} else if (process.env.CROSS_SESSION_BRIDGE_DAEMON !== '1') {
+  const mcp = createMcpServer(ownCaller);
   await mcp.connect(new StdioServerTransport());
-  mcp.server.onclose = () => { forwarder.close(); peer.stop(); };
+  mcp.server.onclose = () => { ownCaller.forwarder.close(); ownCaller.peer.stop(); };
   reload.listen();
 }

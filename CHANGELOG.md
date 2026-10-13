@@ -4,6 +4,10 @@ Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [SemVer](ht
 
 ## [Unreleased]
 
+### Added
+
+- A shared daemon (`src/bridge-daemon.mjs`) that serves `cross-session-bridge` and the native relay for every Codex thread from one process, reached through a small stdio shim (`scripts/codex-bridge-shim.py`) instead of a node supervisor and worker pair per server per thread. Caller identity, reply routing, permission mode and delivery receipts stay per thread; bound reply addresses survive a daemon restart.
+
 ### Fixed
 
 - Discover Claude Desktop sessions when accumulated task configuration exceeds 32 MiB. Retain only bounded identity fields and SHA-256 fingerprints while preserving account isolation, duplicate detection, and concurrent-change checks.
