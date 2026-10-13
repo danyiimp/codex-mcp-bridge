@@ -199,8 +199,8 @@ function hasMessagingEndpoint(entry) {
 
 export const BRIDGE_ENTRYPOINT = "codex-bridge";
 
-export function listClaudeSessions({ includeDead = false, includeBridges = false, diagnostics } = {}) {
-  const discovery = discoverClaudeDataDirs("sessions");
+export function listClaudeSessions({ includeDead = false, includeBridges = false, diagnostics, env = process.env } = {}) {
+  const discovery = discoverClaudeDataDirs("sessions", env);
   if (diagnostics) Object.assign(diagnostics, discovery);
   const rows = [];
   const seen = new Set();

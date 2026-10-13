@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
-import { createCrossSessionTasks, buildOaiMessage, normalizeImages, formatImages, compactThreadRead } from '../src/cross-session-tasks.mjs';
+import { createCrossSessionTasks, buildOaiMessage, normalizeImages, formatImages, compactThreadRead, compactThreadList } from '../src/cross-session-tasks.mjs';
 import { DesktopTaskReceipts } from '../src/desktop-task-receipts.mjs';
 
 const SOURCE = '11111111-1111-4111-8111-111111111111';
@@ -347,6 +347,18 @@ describe('cross-session image inputs and bounded read', () => {
     }
     assert.equal(input.turns[0].items.length, 82);
     assert.ok(input.turns[0].items[0].output.length > 4000);
+  });
+
+  it('keeps fifty Desktop tasks with prompt-length Cyrillic titles inside one relay frame', () => {
+    const row = index => ({ id: `${index}`, kind: 'codex', hostId: 'local', cwd: '/absolute/project', title: 'Длинный первый промпт задачи '.repeat(70) });
+    const input = { schemaVersion: 4, pinnedThreads: [row('pinned')], threads: Array.from({ length: 50 }, (_, index) => row(index)) };
+    assert.ok(Buffer.byteLength(JSON.stringify(input)) > 128 * 1024);
+    const compact = compactThreadList(input);
+    assert.ok(Buffer.byteLength(JSON.stringify(compact)) < 64 * 1024);
+    assert.equal(compact.threads.length, 50);
+    assert.equal(compact.threads[0].title, `${input.threads[0].title.slice(0, 200)}…`);
+    assert.equal(compact.pinnedThreads[0].id, 'pinned');
+    assert.equal(compact.schemaVersion, 4);
   });
 
   it('fails closed when essential metadata cannot fit within the read frame budget', () => {

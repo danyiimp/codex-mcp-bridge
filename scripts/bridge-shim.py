@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Per-thread stdio end of the shared Codex bridge daemon (src/bridge-daemon.mjs): ~5 MB of python instead of a node
-supervisor + worker pair (~120 MB) for each of cross-session-bridge and codex-native-relay in every loaded Codex thread.
+"""Per-caller stdio end of the shared cross-session-bridge daemon (src/bridge-daemon.mjs): ~5–10 MB of python instead of a
+node supervisor + worker pair (~65–120 MB) in every Claude session and every loaded Codex thread.
 
-Usage in ~/.codex/config.toml: command = "/usr/bin/python3", args = ["<repo>/scripts/codex-bridge-shim.py", "<server>"],
-server = cross-session-bridge | codex-native-relay. The daemon identifies the thread by the _meta of each tool call, as
-the stdio server did; the pid this shim reports names the thread's peer entry and its parent is the app-server.
-initialize and tools/list are answered at once from codex-shim-cache.json (refreshed from the daemon on every connect),
-so a slow or restarting daemon never fails Codex's MCP startup. A daemon restart is invisible to Codex: the shim
-reconnects and replays the MCP handshake. Calls in flight at that moment get an error and are never retried."""
+Claude Code: command = "/usr/bin/python3", args = ["<repo>/scripts/bridge-shim.py"] (~/.local/share/cross-session-bridge/shim.py
+links here). The daemon identifies the caller by the pid this shim reports — its own parent, the Claude process — and
+CLAUDE_CONFIG_DIR.
+Codex (~/.codex/config.toml): args = ["<repo>/scripts/bridge-shim.py", "cross-session-bridge"]. The daemon identifies the
+thread by the _meta of each tool call, as the stdio server did; the pid this shim reports names the thread's peer entry.
+initialize and tools/list are answered at once from the cache file (refreshed from the daemon on every connect), so a slow or
+restarting daemon never fails the client's MCP startup. A daemon restart is invisible to the client: the shim reconnects and
+replays the MCP handshake. Calls in flight at that moment get an error and are never retried."""
 from __future__ import annotations
 
 import json
@@ -18,13 +20,19 @@ import sys
 import threading
 import time
 
-SERVER = sys.argv[1] if len(sys.argv) > 1 else "cross-session-bridge"
+SERVER = sys.argv[1] if len(sys.argv) > 1 else "claude"
 HOME = os.path.expanduser("~/.local/share/cross-session-bridge")
-SOCKET = os.environ.get("CROSS_SESSION_BRIDGE_CODEX_SOCKET") or os.path.join(HOME, "codex-daemon.sock")
-CACHE = os.environ.get("CROSS_SESSION_BRIDGE_CODEX_SHIM_CACHE") or os.path.join(HOME, "codex-shim-cache.json")
-HELLO = json.dumps({"bridge_caller": {"codex": {"pid": os.getpid(), "server": SERVER}}}).encode() + b"\n"
+if SERVER == "claude":
+    SOCKET = os.environ.get("CROSS_SESSION_BRIDGE_SOCKET") or os.path.join(HOME, "daemon.sock")
+    CACHE = os.environ.get("CROSS_SESSION_BRIDGE_SHIM_CACHE") or os.path.join(HOME, "claude-shim-cache.json")
+    CALLER = {"ppid": os.getppid(), "configDir": os.environ.get("CLAUDE_CONFIG_DIR")}
+else:
+    SOCKET = os.environ.get("CROSS_SESSION_BRIDGE_CODEX_SOCKET") or os.path.join(HOME, "codex-daemon.sock")
+    CACHE = os.environ.get("CROSS_SESSION_BRIDGE_CODEX_SHIM_CACHE") or os.path.join(HOME, "codex-shim-cache.json")
+    CALLER = {"codex": {"pid": os.getpid(), "server": SERVER}}
+HELLO = json.dumps({"bridge_caller": CALLER}).encode() + b"\n"
 TOOLS_REFRESH = b'{"jsonrpc":"2.0","id":"shim:tools","method":"tools/list"}\n'
-LOST = ("The shared Codex bridge daemon restarted while this call was in flight. The operation may already have been "
+LOST = ("The shared cross-session-bridge daemon restarted while this call was in flight. The operation may already have been "
         "dispatched; it was not retried. Check get_oai_request / read_oai_session / get_delivery before any resend.")
 
 lock = threading.Lock()  # the daemon connection

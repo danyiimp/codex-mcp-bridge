@@ -113,17 +113,27 @@ async function oaiList() {
   const rows = [...(response.pinnedThreads ?? []), ...response.threads].filter(row => row.kind === 'codex' && row.hostId === 'local' && row.id !== executorId);
   return [...new Map(rows.map(row => [row.id, row])).values()];
 }
-function claudeList(diagnostics) {
-  return listClaudeSessions({ diagnostics }).filter(row => row.pid !== process.pid && (row.entrypoint === 'cli' || row.entrypoint === 'remote-peer' && row.remotePeer?.entrypoint === 'cli'));
+function claudeList(diagnostics, env) {
+  return listClaudeSessions({ diagnostics, env }).filter(row => row.pid !== process.pid && (row.entrypoint === 'cli' || row.entrypoint === 'remote-peer' && row.remotePeer?.entrypoint === 'cli'));
+}
+// Shared daemon (bridge-daemon.mjs): a Claude session's stdio shim reports its parent, the Claude process, and its
+// CLAUDE_CONFIG_DIR; claudeSource() starts from them instead of this process's own parent and environment.
+const claudeCaller = new AsyncLocalStorage();
+function claudeCallerEnv(configDir) {
+  const { CLAUDE_CONFIG_DIR: _, ...env } = process.env;
+  return configDir ? { ...env, CLAUDE_CONFIG_DIR: configDir } : env;
 }
 async function claudeSource() {
-  const config = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+  const { ppid, env } = claudeCaller.getStore() ?? { ppid: process.ppid, env: process.env };
+  const config = env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
   let ownRegistry;
   try { ownRegistry = fs.realpathSync.native(path.join(config, 'sessions')); }
   catch { throw new Error('Не найден registry вызывающего Claude-профиля.'); }
-  const rows = claudeList().filter(row => row.dir === ownRegistry && row.entrypoint === 'cli');
-  let expectedPid = process.ppid;
-  for (const processInfo of await readProcessAncestry({ parentPid: process.ppid, maxDepth: 10 })) {
+  const indexed = process.env.CROSS_SESSION_BRIDGE_DAEMON === '1' && indexedClaudeSource(ppid, ownRegistry);
+  if (indexed) return indexed;
+  const rows = claudeList(undefined, env).filter(row => row.dir === ownRegistry && row.entrypoint === 'cli');
+  let expectedPid = ppid;
+  for (const processInfo of await readProcessAncestry({ parentPid: ppid, maxDepth: 10 })) {
     if (processInfo.pid !== expectedPid) throw new Error('Не удалось подтвердить цепочку процессов вызывающей Claude Code-сессии.');
     const candidates = rows.filter(row => row.pid === processInfo.pid && row.processStart === processInfo.processStart);
     if (candidates.length > 1) throw new Error('Registry содержит несколько идентичностей вызывающего Claude process.');
@@ -132,6 +142,36 @@ async function claudeSource() {
     expectedPid = processInfo.parentPid;
   }
   throw new Error('Не удалось подтвердить вызывающую Claude Code-сессию по родительскому процессу.');
+}
+// Daemon fast path: the caller's own registry file plus the process start times that com.dany.registry-index takes with one
+// batched ps every 20 s (~/.agents-hub-bot/registry-index.json) replace the scan of every profile and a ps per call. The same
+// checks as assertClaudeSessionProcess: a regular file in the caller's own registry, a live pid, an existing messaging socket,
+// procStart equal to the pid's start. Anything missing (index older than 40 s, a session younger than the index) → full path.
+const REGISTRY_INDEX = path.join(os.homedir(), '.agents-hub-bot', 'registry-index.json');
+let registryIndexCache = { mtimeMs: 0, data: null };
+function registryIndex() {
+  try {
+    const { mtimeMs } = fs.statSync(REGISTRY_INDEX);
+    if (mtimeMs !== registryIndexCache.mtimeMs) registryIndexCache = { mtimeMs, data: JSON.parse(fs.readFileSync(REGISTRY_INDEX, 'utf8')) };
+    const { data } = registryIndexCache;
+    return Date.now() / 1000 - Number(data.ts) < 40 && data.starts && typeof data.starts === 'object' ? data : null;
+  } catch { return null; }
+}
+function indexedClaudeSource(pid, ownRegistry) {
+  const index = registryIndex();
+  if (!index) return null;
+  const registryFile = path.join(ownRegistry, `${pid}.json`);
+  let entry;
+  try {
+    if (!fs.lstatSync(registryFile).isFile()) return null;
+    entry = JSON.parse(fs.readFileSync(registryFile, 'utf8'));
+    process.kill(pid, 0);
+  } catch { return null; }
+  if (entry.pid !== pid || entry.entrypoint !== 'cli' || !uuid.test(entry.sessionId ?? '') || !entry.procStart || index.starts[String(pid)] !== entry.procStart
+      || !entry.messagingSocketPath || !fs.existsSync(entry.messagingSocketPath)) return null;
+  return { pid, name: entry.name ?? null, sessionId: entry.sessionId, bridgeSessionId: entry.bridgeSessionId ?? null, cwd: entry.cwd ?? null,
+    kind: entry.kind ?? null, entrypoint: entry.entrypoint, remotePeer: entry.remotePeer ?? null, startedAt: entry.startedAt ?? null,
+    processStart: entry.procStart, socket: entry.messagingSocketPath, dir: ownRegistry, registryFile, profileSources: [], alive: true };
 }
 function rolloutFiles(threadId) {
   const base = path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'sessions');
@@ -333,14 +373,18 @@ const codexCallers = new Set();
 let inFlight = 0;
 let suspending = false;
 
-function createMcpServer(caller) {
+function createMcpServer(caller, claude) {
   const mcp = new McpServer({ name: 'cross-session-bridge', version: '1.4.0' }, { instructions: INSTRUCTIONS });
   for (const [name, handler] of Object.entries(handlers)) mcp.registerTool(name, { description: descriptions[name] ?? name.replaceAll('_', ' '), inputSchema: schemas[name], annotations: { readOnlyHint: !mutatingTools.has(name), destructiveHint: false, openWorldHint: true } }, async (args, extra) => {
     if (suspending) return { content: [{ type: 'text', text: 'The shared bridge daemon is restarting to load new code; nothing was dispatched. Call again in a few seconds.' }], isError: true };
     inFlight++;
-    try { return await callerContext.run(caller, () => reload.run(async () => textResult(await handler(args, extra)))); }
+    const started = Date.now();
+    try { return await claudeCaller.run(claude, () => callerContext.run(caller, () => reload.run(async () => textResult(await handler(args, extra))))); }
     catch (error) { return { content: [{ type: 'text', text: error.message }], isError: true }; }
-    finally { inFlight--; }
+    finally {
+      inFlight--;
+      if (claude) process.stderr.write(`${new Date().toISOString()} call ${name} caller ${claude.ppid} ${Date.now() - started} ms\n`);
+    }
   });
   return mcp;
 }
@@ -360,6 +404,13 @@ export async function serveCodexConnection(stream, { pid, restore = null }) {
     if (!caller.suspended) { caller.forwarder.close(); caller.peer.stop(); }
     void mcp.close();
   });
+  await mcp.connect(new StdioServerTransport(stream, stream));
+  stream.resume();
+}
+// Shared daemon entry for a Claude session's shim: every call runs as that session, identified by its pid and profile.
+export async function serveClaudeConnection(stream, { ppid, configDir }) {
+  const mcp = createMcpServer(ownCaller, { ppid, env: claudeCallerEnv(configDir) });
+  stream.once('close', () => void mcp.close());
   await mcp.connect(new StdioServerTransport(stream, stream));
   stream.resume();
 }

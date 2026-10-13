@@ -443,6 +443,7 @@ describe("native dispatch parameters", () => {
     assert.equal(NATIVE_DISPATCH_METHOD, "tools/call");
     assert.deepEqual(first, {
       arguments: { threadId: "open-in-desktop", prompt: "hello" },
+      callerSource: "codex",
       callId: first.callId,
       namespace: "codex_app",
       threadId: "relay-1",

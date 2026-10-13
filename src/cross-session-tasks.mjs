@@ -125,6 +125,12 @@ function compactReadResult(value, maximum = 4000, parentKey = '') {
   }));
 }
 
+// Desktop 26.1007 titles carry the whole first prompt (~2 KB): 50 rows of Cyrillic overflow the 128 KB relay frame.
+export function compactThreadList(response) {
+  const shorten = (row) => typeof row?.title === 'string' && row.title.length > 200 ? { ...row, title: `${row.title.slice(0, 200)}…` } : row;
+  return { ...response, threads: response?.threads?.map(shorten), pinnedThreads: response?.pinnedThreads?.map(shorten) };
+}
+
 export function compactThreadRead(response) {
   const maximum = 96 * 1024;
   const size = (value) => Buffer.byteLength(JSON.stringify(value) ?? '', 'utf8');
