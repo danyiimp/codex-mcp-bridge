@@ -235,21 +235,24 @@ Read a new session with `read_claude_session(target=sessionId, cwd=..., profile=
 
 From Claude Code, `create_oai_session` creates a persistent Codex Desktop task; `read_oai_session` and `get_oai_request` recover its result, and `send_to_oai_session` continues it. The bridge starts these tasks with full access (`approval_policy: never`, `danger-full-access` sandbox, network enabled), so give them work you intend to run with those permissions. Pin `model` and `effort` on creation or follow-up when appropriate. Claude's own sessions keep the permission mode selected at creation.
 
-### One shared process for every Codex thread (macOS)
+### One shared process for every Claude session and Codex thread (macOS)
 
-Codex starts each MCP server once per loaded thread, so the stdio registration above costs a node supervisor and worker for `cross-session-bridge` and another pair for `codex-native-relay` in every thread (about 150 MB of RSS each). `src/bridge-daemon.mjs` serves all threads from one process on a private Unix socket (`~/.local/share/cross-session-bridge/codex-daemon.sock`); each thread runs only `scripts/codex-bridge-shim.py` (a few MB of Python). Run the daemon under launchd with `KeepAlive` and the same environment the stdio registration had (`CLAUDE_BIN`, `CODEX_BIN`, `CCS_BIN`, `CROSS_SESSION_BRIDGE_CLAUDE_PROFILE`, proxy variables), then register the shim for both servers:
+Claude Code and Codex start each MCP server once per session or loaded thread, so the stdio registration above costs a node supervisor and worker in every one of them (about 65–150 MB of RSS each). `src/bridge-daemon.mjs` serves all of them from one process on two private Unix sockets in `~/.local/share/cross-session-bridge/`: `daemon.sock` for Claude sessions and `codex-daemon.sock` for Codex threads. Each caller runs only `scripts/bridge-shim.py` (a few MB of Python). Run the daemon under launchd with `KeepAlive` and the same environment the stdio registration had (`CLAUDE_BIN`, `CODEX_BIN`, `CCS_BIN`, `CROSS_SESSION_BRIDGE_CLAUDE_PROFILE`, proxy variables), then register the shim:
 
 ```toml
+# ~/.codex/config.toml
 [mcp_servers.cross-session-bridge]
 command = "/usr/bin/python3"
-args = ["/path/to/codex-mcp-bridge/scripts/codex-bridge-shim.py", "cross-session-bridge"]
-
-[mcp_servers.codex-native-relay]
-command = "/usr/bin/python3"
-args = ["/path/to/codex-mcp-bridge/scripts/codex-bridge-shim.py", "codex-native-relay"]
+args = ["/path/to/codex-mcp-bridge/scripts/bridge-shim.py", "cross-session-bridge"]
 ```
 
-Each tool call is still attributed to its thread by the host's `x-codex-turn-metadata` and checked against the thread's rollout. A thread's Claude reply address is a peer entry under its own shim's pid, so it disappears with the thread, and replies are forwarded into that thread only. The relay dispatches through the Desktop app-server that launched a connected shim. When the source changes, the daemon exits once nothing is in flight, saves each bound thread's reply address and receipts, and restores them when the shims reconnect to the restarted daemon. Calls in flight during a restart fail and are never resent.
+```sh
+claude mcp add --scope user cross-session-bridge -- /usr/bin/python3 /path/to/codex-mcp-bridge/scripts/bridge-shim.py
+```
+
+A Claude session is identified by the shim's parent pid and its `CLAUDE_CONFIG_DIR`, verified against that profile's session registry exactly as the stdio worker verified its own parent. A Codex tool call is still attributed to its thread by the host's `x-codex-turn-metadata` and checked against the thread's rollout. A thread's Claude reply address is a peer entry under its own shim's pid, so it disappears with the thread, and replies are forwarded into that thread only. When the source changes, the daemon exits once nothing is in flight, saves each bound thread's reply address and receipts, and restores them when the shims reconnect to the restarted daemon. Calls in flight during a restart fail and are never resent.
+
+`codex-native-relay` stays a stdio companion launched by Codex Desktop (`<bundled node> src/mcp-supervisor.mjs native-relay-companion.mjs`). Codex Desktop accepts a client on its native tools pipe only when that process, its parent and its grandparent carry the vendor's code signature; a daemon started by launchd is refused with `dynamic_app_tools_peer_rejected reason=untrusted-process-ancestry`.
 
 This combined entrypoint has been verified on macOS with Claude Code's native `--background` support. The original upstream CLI/app-server mode remains documented for Linux/WSL; the combined Desktop task path needs the native Desktop relay.
 

@@ -6,10 +6,13 @@ Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [SemVer](ht
 
 ### Added
 
-- A shared daemon (`src/bridge-daemon.mjs`) that serves `cross-session-bridge` and the native relay for every Codex thread from one process, reached through a small stdio shim (`scripts/codex-bridge-shim.py`) instead of a node supervisor and worker pair per server per thread. Caller identity, reply routing, permission mode and delivery receipts stay per thread; bound reply addresses survive a daemon restart.
+- A shared daemon (`src/bridge-daemon.mjs`) that serves `cross-session-bridge` for every Claude session and every Codex thread from one process, reached through a small stdio shim (`scripts/bridge-shim.py`) instead of a node supervisor and worker pair per caller. Claude callers are identified by the shim's parent pid and `CLAUDE_CONFIG_DIR`, with a fast path through a fresh `registry-index.json`; Codex caller identity, reply routing, permission mode and delivery receipts stay per thread; bound reply addresses survive a daemon restart.
 
 ### Fixed
 
+- Codex Desktop 26.1007 rejected every relay dispatch with `Invalid app tool request`: `tools/call` now requires `callerSource`, which the relay sends as `codex`.
+- `list_oai_sessions` failed with an oversized relay frame once Desktop started returning the whole first prompt as each task title; the companion shortens titles in `list_threads` to 200 characters.
+- The native relay companion is no longer hosted by the shared daemon: Codex Desktop refuses native tools pipe clients outside its own signed process tree, so the companion stays a child of the Desktop app-server.
 - Discover Claude Desktop sessions when accumulated task configuration exceeds 32 MiB. Retain only bounded identity fields and SHA-256 fingerprints while preserving account isolation, duplicate detection, and concurrent-change checks.
 - Report Desktop task verification failures separately from missing peer endpoints in session discovery and bridge status.
 

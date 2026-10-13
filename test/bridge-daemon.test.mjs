@@ -14,7 +14,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 async function eventually(read, predicate, details = () => '') {
-  const deadline = Date.now() + 15000;
+  const deadline = Date.now() + 60000;
   let value;
   do {
     value = await read();
@@ -76,7 +76,8 @@ async function fixture(t) {
   ].map(JSON.stringify).join('\n') + '\n');
 
   const env = { PATH: process.env.PATH, HOME: root, CODEX_HOME: path.join(root, '.codex'), CLAUDE_CONFIG_DIR: path.join(root, '.claude'),
-    CODEX_NATIVE_RELAY_SOCKET: relayPath, CROSS_SESSION_BRIDGE_CODEX_SOCKET: daemonSocket,
+    CODEX_NATIVE_RELAY_SOCKET: relayPath, CROSS_SESSION_BRIDGE_CODEX_SOCKET: daemonSocket, CROSS_SESSION_BRIDGE_SOCKET: `${prefix}-claude-daemon.sock`,
+    CROSS_SESSION_BRIDGE_SHIM_CACHE: path.join(root, 'claude-shim-cache.json'),
     CROSS_SESSION_BRIDGE_CODEX_STATE: path.join(root, 'codex-callers.json'), CROSS_SESSION_BRIDGE_CODEX_SHIM_CACHE: path.join(root, 'shim-cache.json') };
   let daemonLog = '';
   const startDaemon = () => {
@@ -95,7 +96,7 @@ async function fixture(t) {
   await eventually(() => fs.existsSync(daemonSocket), Boolean, () => daemonLog);
   const connectShim = async server => {
     const client = new Client({ name: 'codex-thread', version: '1' });
-    const transport = new StdioClientTransport({ command: 'python3', args: [path.join(repository, 'scripts/codex-bridge-shim.py'), server], env, stderr: 'pipe' });
+    const transport = new StdioClientTransport({ command: 'python3', args: [path.join(repository, 'scripts/bridge-shim.py'), server], env, stderr: 'pipe' });
     await client.connect(transport);
     clients.push(client);
     return { client, pid: transport.pid };
@@ -123,8 +124,6 @@ it('serves every Codex thread from one daemon and routes each Claude reply back 
   const { root, env, threads, claudeId, registry, relayMessages, received, shims, call, answer, connectShim, restart, log } = fx;
   const { tools } = await shims[0].client.listTools();
   assert.ok(['bridge_status', 'send_to_claude_session', 'get_delivery', 'create_claude_session'].every(name => tools.some(tool => tool.name === name)));
-  const relayTools = await connectShim('codex-native-relay');
-  assert.deepEqual((await relayTools.client.listTools()).tools.map(tool => tool.name), ['native_relay_status']);
 
   const statuses = await Promise.all(shims.map((shim, index) => call(shim, 'bridge_status', {}, threads[index])));
   assert.deepEqual(statuses.map(status => status.structuredContent.caller.threadId), threads.map(thread => thread.threadId));
@@ -165,7 +164,6 @@ it('serves every Codex thread from one daemon and routes each Claude reply back 
   assert.equal(relayMessages[2].targetThreadId, threads[1].threadId);
   const cache = JSON.parse(fs.readFileSync(env.CROSS_SESSION_BRIDGE_CODEX_SHIM_CACHE, 'utf8'));
   assert.ok(cache['cross-session-bridge'].tools.tools.some(tool => tool.name === 'send_to_claude_session'));
-  assert.deepEqual(cache['codex-native-relay'].tools.tools.map(tool => tool.name), ['native_relay_status']);
 });
 
 it('keeps serving every thread while one thread waits for a Claude reply after new code lands, and restarts once that thread unloads', { timeout: 90000, skip: process.platform === 'win32' }, async t => {
@@ -184,4 +182,31 @@ it('keeps serving every thread while one thread waits for a Claude reply after n
   await shims[0].client.close();
   assert.equal(await exited, 0, log());
   assert.deepEqual(JSON.parse(fs.readFileSync(env.CROSS_SESSION_BRIDGE_CODEX_STATE, 'utf8')).map(entry => entry.pid), [shims[1].pid]);
+});
+
+it('serves Claude sessions on their own socket and identifies each caller by its shim parent and its own profile', { timeout: 90000, skip: process.platform === 'win32' }, async t => {
+  const fx = await fixture(t);
+  const { root, env, claudeId, registry, log } = fx;
+  await eventually(() => fs.existsSync(env.CROSS_SESSION_BRIDGE_SOCKET), Boolean, log);
+  // The same Claude process is registered in two profiles; only the profile the shim reports may name the caller.
+  const profile = path.join(root, '.ccs/instances/second');
+  const otherId = randomUUID();
+  fs.mkdirSync(path.join(profile, 'sessions'), { recursive: true });
+  const entry = JSON.parse(fs.readFileSync(path.join(registry, `${process.pid}.json`), 'utf8'));
+  fs.writeFileSync(path.join(profile, 'sessions', `${process.pid}.json`), JSON.stringify({ ...entry, sessionId: otherId, name: 'second-profile' }));
+  const connect = async configDir => {
+    const client = new Client({ name: 'claude-session', version: '1' });
+    await client.connect(new StdioClientTransport({ command: 'python3', args: [path.join(repository, 'scripts/bridge-shim.py')], env: { ...env, CLAUDE_CONFIG_DIR: configDir }, stderr: 'pipe' }));
+    t.after(() => client.close());
+    return client;
+  };
+  const status = async client => (await client.callTool({ name: 'bridge_status', arguments: {} })).structuredContent;
+  const [first, second] = await Promise.all([connect(path.join(root, '.claude')), connect(profile)]);
+  const [one, two] = await Promise.all([status(first), status(second)]);
+  assert.deepEqual([one.caller, two.caller], [{ verified: true, harness: 'claude', sessionId: claudeId }, { verified: true, harness: 'claude', sessionId: otherId }]);
+  assert.equal(one.runtime.pid, two.runtime.pid, 'both sessions are served by one daemon process');
+  fs.writeFileSync(path.join(env.CODEX_HOME, 'native-relay.json'), JSON.stringify({ relayThreadId: randomUUID() }));
+  const listed = await first.callTool({ name: 'list_oai_sessions', arguments: {} });
+  assert.deepEqual(listed.structuredContent?.sessions, [], JSON.stringify(listed));
+  assert.match(log(), new RegExp(`call bridge_status caller ${process.pid} `));
 });

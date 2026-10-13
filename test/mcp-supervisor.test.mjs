@@ -81,8 +81,10 @@ async function connect(t, fixture, extraEnv = {}) {
     ...process.env, CODEX_BRIDGE_RUNTIME_CACHE: path.join(fixture.root, "cache"), CODEX_BRIDGE_RELOAD_POLL_MS: "100",
     CODEX_BRIDGE_RELOAD_SETTLE_MS: "100", TEST_ENTRY: fixture.entry, TEST_LEDGER: fixture.ledger,
     CODEX_HOME: path.join(fixture.root, ".codex"),
+    // Claude discovery stays inside the fixture: a run from a Claude session must not see that session's registry.
+    HOME: fixture.root, USERPROFILE: fixture.root,
   };
-  delete env.CODEX_BRIDGE_DESKTOP_TASKS;
+  for (const name of ["CODEX_BRIDGE_DESKTOP_TASKS", "CLAUDE_CONFIG_DIR", "CCS_HOME", "CCS_DIR"]) delete env[name];
   Object.assign(env, extraEnv);
   const transport = new StdioClientTransport({ command: process.execPath, args: [fixture.launcher], env, stderr: "pipe" });
   let stderr = "";
@@ -457,7 +459,7 @@ for (const threadSource of ['user', 'agent_created_thread']) it(`retains a real 
     {type:'event_msg',payload:{type:'task_started',turn_id:turnId}},
   ];
   fs.writeFileSync(path.join(sessions, `rollout-${threadId}.jsonl`), events.map(JSON.stringify).join('\n')+'\n');
-  const api = await connect(t, fixture, { HOME:fixture.root, USERPROFILE:fixture.root, CLAUDE_CONFIG_DIR:'', CCS_HOME:'', CCS_DIR:'', CODEX_NATIVE_RELAY_SOCKET:relayPath });
+  const api = await connect(t, fixture, { CODEX_NATIVE_RELAY_SOCKET:relayPath });
   const meta = {'x-codex-turn-metadata':{thread_id:threadId,turn_id:turnId,thread_source:threadSource}};
   const before = await api.call('bridge_status', {}, meta);
   assert.equal(before.structuredContent.caller.verified, true);

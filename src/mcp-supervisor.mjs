@@ -193,14 +193,47 @@ export async function runSupervisor(entry, options = {}) {
       void respond().catch((error) => { failure = error.message; output(errorMessage(pending.id, error.message)); });
     },
     exit(worker, error) {
+      const inFlight = worker.clientPending.size > 0 || [...reverse.values()].some((pending) => pending.worker === worker);
       for (const [id, pending] of worker.clientPending) {
         requests.delete(idKey(pending.id));
         output(errorMessage(pending.id, `${error.message}. The operation may already have been dispatched; it was not retried. Retain the original task and receipts.`));
         worker.clientPending.delete(id);
       }
       for (const [id, pending] of reverse) if (pending.worker === worker) reverse.delete(id);
-      if (worker === active && !worker.retiring && !stopping) { failure = `${error.message}; automatic replay is disabled because delivery state may be unknown`; log(failure); }
+      if (worker !== active || worker.retiring || stopping) return;
+      // A worker that dies while a request is in flight leaves that delivery unknown: stay failed until the client
+      // reconnects. One that dies idle (reaped, killed) left nothing half-done, so a fresh worker takes over.
+      if (inFlight || !initializeResult || respawns.filter((at) => Date.now() - at < 60000).length >= 3) {
+        failure = `${error.message}; automatic replay is disabled because delivery state may be unknown`; log(failure);
+      } else void respawn(error);
     },
+  };
+  const respawns = [];
+  const respawn = async (cause) => {
+    respawns.push(Date.now());
+    switching = true;
+    let candidate;
+    try {
+      candidate = spawn(createReleaseSnapshot(root), routingConfiguration());
+      const initialized = await candidate.rpc("initialize", initializeParams);
+      if (initialized.protocolVersion !== initializeResult.protocolVersion || JSON.stringify(initialized.capabilities) !== JSON.stringify(initializeResult.capabilities)) {
+        throw new Error("The respawned worker changed its MCP protocol or capabilities; reconnect the client");
+      }
+      candidate.write({ jsonrpc: "2.0", method: "notifications/initialized" });
+      await candidate.control("activate");
+      workers.delete(active);
+      active = candidate;
+      observed = candidate.release.revision;
+      observedRouting = candidate.routingConfiguration;
+      reason = null;
+      log(`respawned ${entry} after an idle worker exit (${cause.message}); nothing was in flight, nothing replayed`);
+    } catch (error) {
+      if (candidate) { await candidate.stop(); workers.delete(candidate); }
+      failure = `${cause.message}; respawn failed: ${error.message}`; log(failure);
+    } finally {
+      switching = false;
+      for (const message of queue.splice(0)) dispatch(message);
+    }
   };
   const spawn = (release, routing) => {
     if (stopping) throw new Error("The MCP client disconnected before activation");
