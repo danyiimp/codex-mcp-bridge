@@ -23,6 +23,9 @@ import { readProcessAncestry } from './claude-sender-context.mjs';
 const uuid = /^[0-9a-f]{8}-[0-9a-f-]{27}$/i;
 const relay = new NativeDesktopRelay({ timeoutMs: 20000 });
 const runtime = createRuntimeState();
+// A stdio worker whose source changed must be reloaded by its supervisor before it sends again. The shared daemon keeps
+// serving the code it loaded until it can restart; one thread's unanswered Claude message must not stop every thread.
+const assertCurrent = () => process.env.CROSS_SESSION_BRIDGE_DAEMON === '1' || runtime.assertCurrent();
 // A Codex thread's reply address: its peer entry in Claude's registry, the thread it is bound to and the forwarder that
 // delivers Claude's replies into that thread. A stdio worker keeps one for its own process; the shared daemon
 // (bridge-daemon.mjs) keeps one per connected thread shim, under the shim's pid, and runs each call inside callerContext.
@@ -171,7 +174,7 @@ async function bind(caller, source) {
   caller.peer.rename(`oai ${response.thread.title} ${source.threadId.slice(0, 8)}`, { threadId: source.threadId });
 }
 
-const tasks = createCrossSessionTasks({ relay, getSource: claudeSource, assertCurrent: () => runtime.assertCurrent() });
+const tasks = createCrossSessionTasks({ relay, getSource: claudeSource, assertCurrent: () => assertCurrent() });
 
 function claudeTasks(extra) {
   return createClaudeSessions({
@@ -181,7 +184,7 @@ function claudeTasks(extra) {
       if (!extra?._meta?.['x-codex-turn-metadata']) throw new Error('Claude session creation requires the native Codex MCP caller context.');
       return codexSource(extra);
     },
-    assertCurrent: () => runtime.assertCurrent(),
+    assertCurrent: () => assertCurrent(),
   });
 }
 
@@ -225,7 +228,7 @@ const handlers = {
     return { sessions: rows.map(({ id, title, cwd, status }) => ({ id, title, cwd, status })), coverage: 'Последние 50 задач и закреплённые задачи. Для более старой задачи используйте известный точный ID.' };
   },
   async send_to_oai_session({ target, message, images, request_id, reply_mode, model, effort }) {
-    runtime.assertCurrent();
+    assertCurrent();
     assertCodexAvailable();
     assertCodexModel(model, effort);
     const source = await claudeSource();
@@ -240,7 +243,7 @@ const handlers = {
     if (runner) throw new Error(`The first full-access turn of task ${destination.id} is still running in the bridge runner (pid ${runner}); Codex Desktop cannot write to the task until it finishes. Nothing was sent: check read_oai_session and send again after that turn completes.`);
     const prompt = await buildOaiMessage({ source, message, requestId: request_id, images, replyMode: reply_mode });
     const beforeSend = async () => {
-      runtime.assertCurrent();
+      assertCurrent();
       if ((await claudeSource()).sessionId !== source.sessionId) throw new Error('Контекст Claude отправителя изменился; отправка отменена.');
     };
     // model/effort ride the native send_message_to_thread operation; the plain relay path has no fields for them.
@@ -257,7 +260,7 @@ const handlers = {
     return { sessions, discovery, runtime: runtime.status(), transport: remoteTransportStatus(), note: 'Native ListAgents exposes live proxies only. transport.unavailableSessions retains last-seen remote sessions during disconnect. Empty VM results do not prove there are no VM sessions.' };
   },
   async send_to_claude_session({ target, message, wait_seconds = 0, model, effort }, extra) {
-    runtime.assertCurrent();
+    assertCurrent();
     const source = codexSource(extra);
     const destination = choose(claudeList(), target, 'sessionId', 'name');
     assertClaudeSessionProcess(destination);

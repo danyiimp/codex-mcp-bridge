@@ -28,7 +28,7 @@ function listen(server, address) {
   return new Promise(resolve => server.listen(address, resolve));
 }
 
-it('serves every Codex thread from one daemon and routes each Claude reply back to its own thread across a daemon restart', { timeout: 90000, skip: process.platform === 'win32' }, async t => {
+async function fixture(t) {
   // All identities, registries and Desktop dispatches below belong to this isolated fixture.
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-daemon-'));
   fs.cpSync(path.join(repository, 'src'), path.join(root, 'src'), { recursive: true });
@@ -110,6 +110,17 @@ it('serves every Codex thread from one daemon and routes each Claude reply back 
   const shims = [await connectShim('cross-session-bridge'), await connectShim('cross-session-bridge')];
   const call = (shim, name, args, thread) => shim.client.callTool({ name, arguments: args, ...(thread ? { _meta: { 'x-codex-turn-metadata': { thread_id: thread.threadId, turn_id: thread.turnId, thread_source: 'user' } } } : {}) });
 
+  const answer = async (address, text) => new Promise((resolve, reject) => {
+    const connection = net.connect(address, () => connection.end(JSON.stringify(buildFrame({ text, fromSocket: claudeSocket })) + '\n', resolve));
+    connection.on('error', reject);
+  });
+  return { root, env, threads, claudeId, registry, relayMessages, received, shims, call, answer, connectShim, daemonSocket,
+    get daemon() { return daemon; }, restart: () => { daemon = startDaemon(); }, log: () => daemonLog };
+}
+
+it('serves every Codex thread from one daemon and routes each Claude reply back to its own thread across a daemon restart', { timeout: 90000, skip: process.platform === 'win32' }, async t => {
+  const fx = await fixture(t);
+  const { root, env, threads, claudeId, registry, relayMessages, received, shims, call, answer, connectShim, restart, log } = fx;
   const { tools } = await shims[0].client.listTools();
   assert.ok(['bridge_status', 'send_to_claude_session', 'get_delivery', 'create_claude_session'].every(name => tools.some(tool => tool.name === name)));
   const relayTools = await connectShim('codex-native-relay');
@@ -131,32 +142,46 @@ it('serves every Codex thread from one daemon and routes each Claude reply back 
   const addresses = received.map(frame => decodeURIComponent(frame.from.slice(4)));
   assert.deepEqual(addresses, shims.map(shim => `/tmp/cc-socks/${shim.pid}.sock`), 'each thread answers from a peer under its own shim pid');
   for (const shim of shims) assert.equal(JSON.parse(fs.readFileSync(path.join(registry, `${shim.pid}.json`), 'utf8')).pid, shim.pid);
-  const answer = async (address, text) => new Promise((resolve, reject) => {
-    const connection = net.connect(address, () => connection.end(JSON.stringify(buildFrame({ text, fromSocket: claudeSocket })) + '\n', resolve));
-    connection.on('error', reject);
-  });
   await answer(addresses[1], 'reply to thread 1');
   await answer(addresses[0], 'reply to thread 0');
-  await eventually(async () => relayMessages, value => value.length === 2, () => daemonLog);
+  await eventually(async () => relayMessages, value => value.length === 2, log);
   assert.deepEqual(relayMessages.map(message => message.targetThreadId).sort(), threads.map(thread => thread.threadId).sort());
   assert.match(relayMessages.find(message => message.targetThreadId === threads[0].threadId).message, /reply to thread 0/);
   assert.match(relayMessages.find(message => message.targetThreadId === threads[1].threadId).message, /reply to thread 1/);
   assert.equal((await call(shims[0], 'get_delivery', { message_id: sent[1] })).structuredContent.receipt, null, 'a thread does not see another thread\'s deliveries');
 
   // New code on disk: the idle daemon saves each bound thread's reply address and exits; launchd (here: the test) starts it again.
-  const exited = new Promise(resolve => daemon.once('exit', resolve));
+  const exited = new Promise(resolve => fx.daemon.once('exit', resolve));
   fs.appendFileSync(path.join(root, 'src/cross-session-bridge.mjs'), '\n');
-  assert.equal(await exited, 0, daemonLog);
+  assert.equal(await exited, 0, log());
   assert.equal(JSON.parse(fs.readFileSync(env.CROSS_SESSION_BRIDGE_CODEX_STATE, 'utf8')).length, 2);
-  daemon = startDaemon();
-  const after = await eventually(() => call(shims[0], 'bridge_status', {}, threads[0]), value => value.structuredContent?.source?.threadId === threads[0].threadId, () => daemonLog);
+  restart();
+  const after = await eventually(() => call(shims[0], 'bridge_status', {}, threads[0]), value => value.structuredContent?.source?.threadId === threads[0].threadId, log);
   assert.notEqual(after.structuredContent.runtime.pid, statuses[0].structuredContent.runtime.pid);
   assert.equal((await call(shims[0], 'get_delivery', { message_id: sent[0] })).structuredContent.receipt.reply, 'reply to thread 0');
-  await eventually(() => fs.existsSync(addresses[1]), Boolean, () => daemonLog);
+  await eventually(() => fs.existsSync(addresses[1]), Boolean, log);
   await answer(addresses[1], 'later message to thread 1');
-  await eventually(async () => relayMessages, value => value.length === 3, () => daemonLog);
+  await eventually(async () => relayMessages, value => value.length === 3, log);
   assert.equal(relayMessages[2].targetThreadId, threads[1].threadId);
   const cache = JSON.parse(fs.readFileSync(env.CROSS_SESSION_BRIDGE_CODEX_SHIM_CACHE, 'utf8'));
   assert.ok(cache['cross-session-bridge'].tools.tools.some(tool => tool.name === 'send_to_claude_session'));
   assert.deepEqual(cache['codex-native-relay'].tools.tools.map(tool => tool.name), ['native_relay_status']);
+});
+
+it('keeps serving every thread while one thread waits for a Claude reply after new code lands, and restarts once that thread unloads', { timeout: 90000, skip: process.platform === 'win32' }, async t => {
+  const fx = await fixture(t);
+  const { root, env, threads, claudeId, received, shims, call, log } = fx;
+  const unanswered = await call(shims[0], 'send_to_claude_session', { target: claudeId, message: 'never answered', wait_seconds: 0 }, threads[0]);
+  assert.notEqual(unanswered.isError, true, JSON.stringify(unanswered));
+  await eventually(async () => received, value => value.length === 1);
+  const exited = new Promise(resolve => fx.daemon.once('exit', resolve));
+  fs.appendFileSync(path.join(root, 'src/cross-session-bridge.mjs'), '\n');
+  await eventually(async () => log(), value => value.includes('new code waits'));
+  const other = await call(shims[1], 'send_to_claude_session', { target: claudeId, message: 'another thread still sends', wait_seconds: 0 }, threads[1]);
+  assert.notEqual(other.isError, true, JSON.stringify(other));
+  await eventually(async () => received, value => value.length === 2);
+  await fx.answer(decodeURIComponent(received[1].from.slice(4)), 'reply to thread 1');
+  await shims[0].client.close();
+  assert.equal(await exited, 0, log());
+  assert.deepEqual(JSON.parse(fs.readFileSync(env.CROSS_SESSION_BRIDGE_CODEX_STATE, 'utf8')).map(entry => entry.pid), [shims[1].pid]);
 });

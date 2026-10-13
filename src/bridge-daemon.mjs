@@ -99,8 +99,11 @@ const server = net.createServer(socket => {
 });
 
 let exiting = false;
+let waiting = null;
 async function exitForNewCode(reason) {
-  if (exiting || !codexBridgeIdle() || companion.lifecycle.inspect()) return;
+  const busy = codexBridgeIdle() ? companion.lifecycle.inspect() : 'a Claude delivery or tool call is still open';
+  if (busy && waiting !== busy) log(`new code waits: ${(waiting = busy)}`);
+  if (exiting || busy) return;
   exiting = true;
   try {
     const callers = await suspendCodexCallers();
